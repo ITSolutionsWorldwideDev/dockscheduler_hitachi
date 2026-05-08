@@ -71,7 +71,7 @@ interface WorkHours {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const SLOT_DURATION_MINS = 15;
+const SLOT_DURATION_MINS = 30;
 const TRUCKS_PER_SLOT = 2;
 
 const INITIAL_DOCKS: Dock[] = [
@@ -82,20 +82,6 @@ const INITIAL_DOCKS: Dock[] = [
 ];
 
 const PRESET_HOLIDAYS: Record<string, { label: string; dates: string[] }> = {
-  // PK: {
-  //   label: "Pakistan",
-  //   dates: [
-  //     "2025-02-05",
-  //     "2025-03-23",
-  //     "2025-08-14",
-  //     "2025-11-09",
-  //     "2025-12-25",
-  //   ],
-  // },
-  // US: {
-  //   label: "United States",
-  //   dates: ["2025-01-01", "2025-07-04", "2025-11-27", "2025-12-25"],
-  // },
   NL: {
     label: "Neither Land",
     dates: [
@@ -106,10 +92,6 @@ const PRESET_HOLIDAYS: Record<string, { label: string; dates: string[] }> = {
       "2025-12-26",
     ],
   },
-  // EU: {
-  //   label: "European Union",
-  //   dates: ["2025-01-01", "2025-05-01", "2025-12-25", "2025-12-26"],
-  // },
 };
 
 // ─── Weekly View ──────────────────────────────────────────────────────────────
@@ -1137,9 +1119,6 @@ export default function App() {
   const handleAIExtract = async () => {
     setIsExtracting(true);
     try {
-      // Replace this block with your actual geminiService call
-      // const extracted = await extractPlanningFromText(aiInput);
-      // For now, a simple demo parse:
       const lines = aiInput.split("\n").filter((l) => l.trim());
       const newBookings: Booking[] = [];
       lines.forEach((line) => {
@@ -1208,7 +1187,6 @@ export default function App() {
             </span>
           </div>
 
-          {/* Settings button — NEW */}
           <button
             onClick={() => setIsSettingsOpen(true)}
             className="flex items-center gap-2 bg-white border border-slate-200 shadow-sm px-3 py-1.5 rounded-lg text-[10px] font-bold text-slate-600 uppercase tracking-wider hover:bg-slate-50 transition-colors"
@@ -1373,7 +1351,7 @@ export default function App() {
         <div className="col-span-6 row-span-6 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
           <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center shrink-0">
             <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-              {calView === "day" && "Dock Availability (15m Intervals)"}
+              {calView === "day" && "Dock Availability (30m Intervals)"}
               {calView === "week" && "Weekly Overview — All Docks"}
               {calView === "month" &&
                 `Monthly Overview — ${format(selectedDate, "MMMM yyyy")}`}
@@ -1436,7 +1414,7 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Holiday Overlay — NEW */}
+                {/* Holiday Overlay */}
                 {!isWeekendDay && isHolidayDay && (
                   <div className="absolute inset-0 z-20 bg-red-50/90 backdrop-blur-[2px] flex flex-col items-center justify-center p-12 text-center">
                     <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-4">
@@ -1705,7 +1683,6 @@ export default function App() {
                                 <Truck className="w-3 h-3" /> {b.licensePlate}
                               </div>
                             </div>
-                            {/* Amend button — NEW */}
                             <button
                               onClick={() => setAmendingBooking(b)}
                               className="absolute -right-10 group-hover:right-14 top-2 p-1.5 bg-amber-500/10 text-amber-400 rounded-lg transition-all hover:bg-amber-500 hover:text-white"
@@ -1965,7 +1942,7 @@ export default function App() {
           </div>
         )}
 
-        {/* Settings Modal — NEW */}
+        {/* Settings Modal */}
         {isSettingsOpen && (
           <SettingsModal
             docks={docks}
@@ -1976,7 +1953,7 @@ export default function App() {
           />
         )}
 
-        {/* Amend Modal — NEW */}
+        {/* Amend Modal */}
         {amendingBooking && (
           <AmendModal
             booking={amendingBooking}
