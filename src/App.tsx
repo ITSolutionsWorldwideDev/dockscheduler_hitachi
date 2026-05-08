@@ -56,7 +56,7 @@ interface Booking {
   licensePlate: string;
   type: "manual" | "automatic";
   createdAt: string;
-  truckCount?:number
+  truckCount?: number;
 }
 
 interface Dock {
@@ -84,7 +84,7 @@ const INITIAL_DOCKS: Dock[] = [
 
 const PRESET_HOLIDAYS: Record<string, { label: string; dates: string[] }> = {
   NL: {
-    label: "NeitherLand",
+    label: "Netherlands",
     dates: [
       "2025-01-01",
       "2025-04-18",
@@ -299,7 +299,7 @@ function MonthlyView({
   const slotsPerDay =
     (workHours.end - workHours.start) * (60 / SLOT_DURATION_MINS);
   const maxForDay = slotsPerDay * TRUCKS_PER_SLOT * activeDocks.length;
-console.log(bookings)
+  console.log(bookings);
   const getBookingsForDay = (date: Date) =>
     bookings.filter((b) => isSameDay(parseISO(b.startTime), date));
 
@@ -869,7 +869,7 @@ function AmendModal({
                 <input
                   value={truckReference}
                   onChange={(e) => setTruckReference(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20" 
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20"
                 />
               </div>
             </div>
@@ -960,7 +960,7 @@ export default function App() {
     }
   });
 
-  console.log(bookings)
+  console.log(bookings);
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
   const [isAIModalOpen, setIsAIModalOpen] = useState(false);
   const [aiInput, setAiInput] = useState("");
@@ -1119,7 +1119,7 @@ export default function App() {
     setSelectedSlot(null);
   };
 
- const handleAIExtract = async () => {
+  const handleAIExtract = async () => {
     setIsExtracting(true);
     try {
       const lines = aiInput.split("\n").filter((l) => l.trim());
@@ -1128,15 +1128,17 @@ export default function App() {
       lines.forEach((line) => {
         // 1. Match Time (e.g., 08:30, 14h00)
         const timeMatch = line.match(/\b(\d{1,2})[:.h](\d{2})\b/);
-        
+
         // 2. Match Name (Logistics companies or Capitalized names)
         const nameMatch = line.match(
-          /([A-Z][a-z]+(?: [A-Z][a-z]+)+|[A-Z]+ (?:Logistics|Transport|Shipping|Express))/
+          /([A-Z][a-z]+(?: [A-Z][a-z]+)+|[A-Z]+ (?:Logistics|Transport|Shipping|Express))/,
         );
 
         // 3. NEW: Match Truck Count (e.g., "3 trucks", "2 units", "4 containers")
         // It looks for a number followed by keywords. Defaults to 1 if not found.
-        const countMatch = line.match(/(\d+)\s*(?:trucks?|units?|containers?|vcl)/i);
+        const countMatch = line.match(
+          /(\d+)\s*(?:trucks?|units?|containers?|vcl)/i,
+        );
         const truckCount = countMatch ? parseInt(countMatch[1]) : 1;
 
         if (timeMatch && nameMatch) {
@@ -1148,28 +1150,35 @@ export default function App() {
             selectedDate.getDate(),
             h,
             m,
-            0
+            0,
           );
 
           // Loop based on extracted truckCount
           for (let i = 0; i < truckCount; i++) {
             // Distribute across slots if more than TRUCKS_PER_SLOT
             const slotOffset = Math.floor(i / TRUCKS_PER_SLOT);
-            const startTime = addMinutes(baseStart, slotOffset * SLOT_DURATION_MINS);
-            
+            const startTime = addMinutes(
+              baseStart,
+              slotOffset * SLOT_DURATION_MINS,
+            );
+
             // Round-robin dock assignment
-            const dock = activeDocks[(newBookings.length) % activeDocks.length];
+            const dock = activeDocks[newBookings.length % activeDocks.length];
 
             if (dock) {
               newBookings.push({
                 id: Math.random().toString(36).substr(2, 9),
                 dockId: dock.id,
                 startTime: startTime.toISOString(),
-                endTime: addMinutes(startTime, SLOT_DURATION_MINS).toISOString(),
+                endTime: addMinutes(
+                  startTime,
+                  SLOT_DURATION_MINS,
+                ).toISOString(),
                 requesterName: nameMatch[0],
-                truckReference: truckCount > 1 
-                  ? `AI-${nameMatch[0].substring(0,3).toUpperCase()}-#${i + 1}`
-                  : `AI-${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
+                truckReference:
+                  truckCount > 1
+                    ? `AI-${nameMatch[0].substring(0, 3).toUpperCase()}-#${i + 1}`
+                    : `AI-${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
                 driverName: "TBD (AI Sync)",
                 driverPhone: "N/A",
                 licensePlate: "PENDING",
@@ -1186,7 +1195,9 @@ export default function App() {
         setIsAIModalOpen(false);
         setAiInput("");
       } else {
-        alert("No valid planning data found. Try: '09:00 Global Logistics 3 trucks'");
+        alert(
+          "No valid planning data found. Try: '09:00 Global Logistics 3 trucks'",
+        );
       }
     } catch (error) {
       console.error(error);
@@ -1949,7 +1960,7 @@ export default function App() {
                   value={aiInput}
                   onChange={(e) => setAiInput(e.target.value)}
                   className="w-full h-40 bg-slate-50 border border-slate-200 rounded-2xl p-4 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/20 resize-none text-slate-600 leading-relaxed"
-                  placeholder="Paste planning text here..."
+                  placeholder="08:00 AB Logistics 2 trucks..."
                 />
                 <div className="flex gap-3">
                   <button
