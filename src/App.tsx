@@ -3,204 +3,1090 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
-import { 
-  Calendar, 
-  Clock, 
-  Truck, 
-  LayoutDashboard, 
-  Plus, 
-  ChevronLeft, 
+import React, { useState, useMemo, useEffect } from "react";
+import * as XLSX from "xlsx";
+import {
+  Calendar,
+  Clock,
+  Truck,
+  LayoutDashboard,
+  Plus,
+  ChevronLeft,
   ChevronRight,
   User,
   Phone,
   Hash,
-  Activity,
-  FileText
-} from 'lucide-react';
-import { 
-  format, 
-  addMinutes, 
-  startOfDay, 
-  addHours, 
-  isSameDay, 
-  parseISO, 
-  setHours, 
-  setMinutes 
-} from 'date-fns';
-import { Booking, Dock, TimeSlot } from './types';
-import { motion, AnimatePresence } from 'motion/react';
-import { extractPlanningFromText } from './services/geminiService';
+  FileText,
+  Settings,
+  Edit,
+  Trash2,
+  X,
+} from "lucide-react";
+import {
+  format,
+  addMinutes,
+  startOfDay,
+  isSameDay,
+  parseISO,
+  setHours,
+  setMinutes,
+  startOfWeek,
+  endOfWeek,
+  eachDayOfInterval,
+  startOfMonth,
+  endOfMonth,
+  addDays,
+  addMonths,
+  subMonths,
+  isToday,
+} from "date-fns";
+import { motion, AnimatePresence } from "motion/react";
 
-const WORKING_HOURS_START = 7;
-const WORKING_HOURS_END = 15;
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface Booking {
+  id: string;
+  dockId: string;
+  startTime: string;
+  endTime: string;
+  requesterName: string;
+  truckReference: string;
+  driverName: string;
+  driverPhone: string;
+  licensePlate: string;
+  type: "manual" | "automatic";
+  createdAt: string;
+}
+
+interface Dock {
+  id: string;
+  name: string;
+  enabled: boolean;
+}
+
+interface WorkHours {
+  start: number;
+  end: number;
+}
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
 const SLOT_DURATION_MINS = 15;
 const TRUCKS_PER_SLOT = 2;
 
-const DOCKS: Dock[] = [
-  { id: 'dock-1', name: 'Dock 01', capacity: TRUCKS_PER_SLOT },
-  { id: 'dock-2', name: 'Dock 02', capacity: TRUCKS_PER_SLOT },
-  { id: 'dock-3', name: 'Dock 03', capacity: TRUCKS_PER_SLOT },
-  { id: 'dock-4', name: 'Dock 04', capacity: TRUCKS_PER_SLOT },
+const INITIAL_DOCKS: Dock[] = [
+  { id: "dock-1", name: "Dock 01", enabled: true },
+  { id: "dock-2", name: "Dock 02", enabled: true },
+  { id: "dock-3", name: "Dock 03", enabled: true },
+  { id: "dock-4", name: "Dock 04", enabled: true },
 ];
 
+const PRESET_HOLIDAYS: Record<string, { label: string; dates: string[] }> = {
+  PK: {
+    label: "Pakistan",
+    dates: ["2025-02-05", "2025-03-23", "2025-08-14", "2025-11-09", "2025-12-25"],
+  },
+  US: {
+    label: "United States",
+    dates: ["2025-01-01", "2025-07-04", "2025-11-27", "2025-12-25"],
+  },
+  UK: {
+    label: "United Kingdom",
+    dates: ["2025-01-01", "2025-04-18", "2025-04-21", "2025-12-25", "2025-12-26"],
+  },
+  EU: {
+    label: "European Union",
+    dates: ["2025-01-01", "2025-05-01", "2025-12-25", "2025-12-26"],
+  },
+};
+
+// ─── Weekly View ──────────────────────────────────────────────────────────────
+
+function WeeklyView({
+  selectedDate,
+  bookings,
+  holidays,
+  workHours,
+  docks,
+  onDayClick,
+}: {
+  selectedDate: Date;
+  bookings: Booking[];
+  holidays: string[];
+  workHours: WorkHours;
+  docks: Dock[];
+  onDayClick: (date: Date) => void;
+}) {
+  const weekStart = startOfWeek(selectedDate, { weekStartsOn: 1 });
+  const weekDays = eachDayOfInterval({ start: weekStart, end: addDays(weekStart, 6) });
+  const activeDocks = docks.filter((d) => d.enabled);
+
+  const slotsPerDay =
+    (workHours.end - workHours.start) * (60 / SLOT_DURATION_MINS);
+  const maxPerDock = slotsPerDay * TRUCKS_PER_SLOT;
+
+  const getBookingsForDay = (date: Date) =>
+    bookings.filter((b) => isSameDay(parseISO(b.startTime), date));
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden">
+      <div
+        className="grid bg-slate-50/30 border-b border-slate-100 shrink-0"
+        style={{ gridTemplateColumns: `80px repeat(7, 1fr)` }}
+      >
+        <div className="p-2 text-center text-[10px] font-bold text-slate-400 uppercase tracking-widest border-r border-slate-100 italic">
+          DOCK
+        </div>
+        {weekDays.map((day) => {
+          const isHol = holidays.includes(format(day, "yyyy-MM-dd"));
+          return (
+            <div
+              key={day.toISOString()}
+              onClick={() => onDayClick(day)}
+              className={`p-2 text-center border-r border-slate-100 last:border-r-0 cursor-pointer hover:bg-slate-50 transition-colors ${
+                isToday(day) ? "bg-indigo-50" : isHol ? "bg-red-50" : ""
+              }`}
+            >
+              <p className={`text-[10px] font-black uppercase tracking-widest ${isToday(day) ? "text-indigo-600" : "text-slate-500"}`}>
+                {format(day, "EEE")}
+              </p>
+              <p className={`text-lg font-black mt-0.5 ${isToday(day) ? "text-indigo-600" : "text-slate-700"}`}>
+                {format(day, "d")}
+              </p>
+              {(day.getDay() === 0 || day.getDay() === 6) && (
+                <p className="text-[8px] text-slate-400 uppercase font-bold mt-0.5">Closed</p>
+              )}
+              {isHol && (
+                <p className="text-[8px] text-red-400 uppercase font-bold mt-0.5">Holiday</p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="flex-1 overflow-y-auto">
+        {activeDocks.map((dock) => (
+          <div
+            key={dock.id}
+            className="grid border-b border-slate-100 min-h-20"
+            style={{ gridTemplateColumns: `80px repeat(7, 1fr)` }}
+          >
+            <div className="p-3 flex items-center justify-center border-r border-slate-100 bg-slate-50/30">
+              <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                {dock.name}
+              </span>
+            </div>
+            {weekDays.map((day) => {
+              const isWeekend = day.getDay() === 0 || day.getDay() === 6;
+              const isHol = holidays.includes(format(day, "yyyy-MM-dd"));
+              const dayBookings = getBookingsForDay(day).filter((b) => b.dockId === dock.id);
+              const fillPct = Math.min(Math.round((dayBookings.length / maxPerDock) * 100), 100);
+
+              return (
+                <div
+                  key={day.toISOString()}
+                  className={`p-2 border-r border-slate-100 last:border-r-0 flex flex-col gap-1 cursor-pointer ${
+                    isHol ? "bg-red-50/50" : isWeekend ? "bg-slate-50/60" : isToday(day) ? "bg-indigo-50/30" : ""
+                  }`}
+                  onClick={() => onDayClick(day)}
+                >
+                  {isWeekend || isHol ? (
+                    <div className="flex items-center justify-center h-full opacity-40">
+                      <span className={`text-[9px] font-bold uppercase ${isHol ? "text-red-400" : "text-slate-400"}`}>
+                        {isHol ? "Holiday" : "—"}
+                      </span>
+                    </div>
+                  ) : dayBookings.length === 0 ? (
+                    <div className="flex items-center justify-center h-full opacity-30">
+                      <span className="text-[9px] font-bold text-emerald-600 uppercase">Free</span>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex flex-wrap gap-0.5">
+                        {dayBookings.slice(0, 4).map((b) => (
+                          <div
+                            key={b.id}
+                            title={`${b.requesterName} • ${format(parseISO(b.startTime), "HH:mm")} • ${b.licensePlate}`}
+                            className={`text-[7px] font-bold px-1 py-0.5 rounded truncate max-w-full ${
+                              b.type === "automatic"
+                                ? "bg-emerald-100 text-emerald-700 border border-emerald-200"
+                                : "bg-indigo-100 text-indigo-700 border border-indigo-200"
+                            }`}
+                          >
+                            {format(parseISO(b.startTime), "HH:mm")} {b.requesterName}
+                          </div>
+                        ))}
+                        {dayBookings.length > 4 && (
+                          <div className="text-[7px] font-bold text-slate-400 px-1">
+                            +{dayBookings.length - 4} more
+                          </div>
+                        )}
+                      </div>
+                      <div className="mt-auto">
+                        <div className="w-full bg-slate-100 h-1 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${
+                              fillPct >= 80 ? "bg-red-400" : fillPct >= 40 ? "bg-amber-400" : "bg-emerald-400"
+                            }`}
+                            style={{ width: `${fillPct}%` }}
+                          />
+                        </div>
+                        <p className="text-[8px] text-slate-400 font-bold mt-0.5 text-right">{fillPct}%</p>
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Monthly View ─────────────────────────────────────────────────────────────
+
+function MonthlyView({
+  selectedDate,
+  bookings,
+  holidays,
+  docks,
+  workHours,
+  onDayClick,
+}: {
+  selectedDate: Date;
+  bookings: Booking[];
+  holidays: string[];
+  docks: Dock[];
+  workHours: WorkHours;
+  onDayClick: (date: Date) => void;
+}) {
+  const monthStart = startOfMonth(selectedDate);
+  const monthEnd = endOfMonth(selectedDate);
+  const calStart = startOfWeek(monthStart, { weekStartsOn: 1 });
+  const calEnd = endOfWeek(monthEnd, { weekStartsOn: 1 });
+  const calDays = eachDayOfInterval({ start: calStart, end: calEnd });
+  const activeDocks = docks.filter((d) => d.enabled);
+  const slotsPerDay = (workHours.end - workHours.start) * (60 / SLOT_DURATION_MINS);
+  const maxForDay = slotsPerDay * TRUCKS_PER_SLOT * activeDocks.length;
+
+  const getBookingsForDay = (date: Date) =>
+    bookings.filter((b) => isSameDay(parseISO(b.startTime), date));
+
+  return (
+    <div className="flex flex-col h-full p-4">
+      <div className="grid grid-cols-7 mb-2">
+        {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => (
+          <div key={d} className="text-center text-[10px] font-black text-slate-400 uppercase tracking-widest py-1">
+            {d}
+          </div>
+        ))}
+      </div>
+      <div className="grid grid-cols-7 flex-1 gap-1">
+        {calDays.map((day) => {
+          const inMonth = day.getMonth() === selectedDate.getMonth();
+          const isWeekend = day.getDay() === 0 || day.getDay() === 6;
+          const isHol = holidays.includes(format(day, "yyyy-MM-dd"));
+          const dayBookings = getBookingsForDay(day);
+          const fillPct = Math.min(Math.round((dayBookings.length / maxForDay) * 100), 100);
+          const selected = isSameDay(day, selectedDate);
+
+          return (
+            <div
+              key={day.toISOString()}
+              onClick={() => onDayClick(day)}
+              className={`rounded-xl p-2 flex flex-col cursor-pointer transition-all border ${
+                selected
+                  ? "border-indigo-400 bg-indigo-50"
+                  : isHol
+                  ? "border-red-200 bg-red-50"
+                  : isToday(day)
+                  ? "border-indigo-200 bg-indigo-50/40"
+                  : "border-slate-100 hover:border-slate-200 hover:bg-slate-50"
+              } ${!inMonth ? "opacity-30" : ""} ${isWeekend && inMonth ? "bg-slate-50/50" : ""}`}
+            >
+              <div className="flex justify-between items-start mb-1">
+                <span className={`text-xs font-black ${isToday(day) ? "text-indigo-600" : inMonth ? "text-slate-700" : "text-slate-400"}`}>
+                  {format(day, "d")}
+                </span>
+                {dayBookings.length > 0 && (
+                  <span className="text-[8px] font-black text-indigo-500 bg-indigo-100 px-1 py-0.5 rounded-full">
+                    {dayBookings.length}
+                  </span>
+                )}
+              </div>
+              {isHol ? (
+                <span className="text-[7px] font-bold text-red-400 uppercase">Holiday</span>
+              ) : isWeekend ? (
+                <span className="text-[7px] font-bold text-slate-300 uppercase">Closed</span>
+              ) : dayBookings.length > 0 ? (
+                <>
+                  <div className="flex flex-wrap gap-0.5 flex-1">
+                    {dayBookings.slice(0, 2).map((b) => (
+                      <div
+                        key={b.id}
+                        className={`text-[6px] font-bold px-0.5 rounded truncate w-full ${
+                          b.type === "automatic" ? "bg-emerald-100 text-emerald-700" : "bg-indigo-100 text-indigo-700"
+                        }`}
+                      >
+                        {b.requesterName}
+                      </div>
+                    ))}
+                    {dayBookings.length > 2 && (
+                      <span className="text-[6px] text-slate-400 font-bold">+{dayBookings.length - 2}</span>
+                    )}
+                  </div>
+                  <div className="mt-1 w-full bg-slate-100 h-0.5 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full ${fillPct >= 80 ? "bg-red-400" : fillPct >= 40 ? "bg-amber-400" : "bg-emerald-400"}`}
+                      style={{ width: `${fillPct}%` }}
+                    />
+                  </div>
+                </>
+              ) : (
+                <span className="text-[7px] font-bold text-emerald-400 uppercase">Free</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Settings Modal ───────────────────────────────────────────────────────────
+
+function SettingsModal({
+  docks,
+  workHours,
+  holidays,
+  onSave,
+  onClose,
+}: {
+  docks: Dock[];
+  workHours: WorkHours;
+  holidays: string[];
+  onSave: (docks: Dock[], workHours: WorkHours, holidays: string[]) => void;
+  onClose: () => void;
+}) {
+  const [tab, setTab] = useState<"docks" | "hours" | "holidays">("docks");
+  const [localDocks, setLocalDocks] = useState<Dock[]>(docks.map((d) => ({ ...d })));
+  const [localHours, setLocalHours] = useState<WorkHours>({ ...workHours });
+  const [localHolidays, setLocalHolidays] = useState<string[]>([...holidays]);
+  const [newHolidayDate, setNewHolidayDate] = useState("");
+  const [hoursError, setHoursError] = useState("");
+
+  const handleSave = () => {
+    if (localHours.start >= localHours.end) {
+      setHoursError("Start hour must be less than end hour.");
+      setTab("hours");
+      return;
+    }
+    onSave(localDocks, localHours, localHolidays);
+  };
+
+  const addHoliday = () => {
+    if (newHolidayDate && !localHolidays.includes(newHolidayDate)) {
+      setLocalHolidays((prev) => [...prev, newHolidayDate].sort());
+      setNewHolidayDate("");
+    }
+  };
+
+  const importPreset = (key: string) => {
+    const preset = PRESET_HOLIDAYS[key];
+    if (!preset) return;
+    setLocalHolidays((prev) => {
+      const merged = [...prev];
+      preset.dates.forEach((d) => { if (!merged.includes(d)) merged.push(d); });
+      return merged.sort();
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 bg-[#141414]/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <motion.div
+        initial={{ scale: 0.9, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.9, opacity: 0 }}
+        className="bg-white rounded-3xl w-full max-w-xl overflow-hidden shadow-2xl"
+      >
+        {/* Header */}
+        <div className="bg-slate-900 p-6 text-white flex justify-between items-start">
+          <div>
+            <h3 className="text-xl font-bold tracking-tight">SETTINGS</h3>
+            <p className="text-[10px] font-bold uppercase opacity-50 tracking-widest mt-1">
+              Docks · Work Hours · Holiday Calendar
+            </p>
+          </div>
+          <button onClick={onClose} className="p-1.5 hover:bg-slate-800 rounded-lg transition-colors">
+            <X className="w-4 h-4 text-slate-400" />
+          </button>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex border-b border-slate-100">
+          {(["docks", "hours", "holidays"] as const).map((t) => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={`flex-1 py-3 text-xs font-bold uppercase tracking-widest transition-all ${
+                tab === t
+                  ? "text-indigo-600 border-b-2 border-indigo-600"
+                  : "text-slate-400 hover:text-slate-600"
+              }`}
+            >
+              {t === "docks" ? "Dock Schedules" : t === "hours" ? "Work Hours" : "Holidays"}
+            </button>
+          ))}
+        </div>
+
+        {/* Body */}
+        <div className="p-6 max-h-[55vh] overflow-y-auto">
+          {/* ── Dock Schedules Tab ── */}
+          {tab === "docks" && (
+            <div className="space-y-1">
+              <p className="text-[10px] text-slate-400 mb-4 leading-relaxed">
+                Toggle docks on/off and rename them. Disabled docks are hidden from the schedule grid.
+              </p>
+              {localDocks.map((dock, i) => (
+                <div key={dock.id} className="flex items-center gap-3 py-3 border-b border-slate-100 last:border-0">
+                  <input
+                    type="checkbox"
+                    checked={dock.enabled}
+                    onChange={(e) =>
+                      setLocalDocks((prev) =>
+                        prev.map((d, idx) => idx === i ? { ...d, enabled: e.target.checked } : d)
+                      )
+                    }
+                    className="w-4 h-4 accent-indigo-600 cursor-pointer"
+                  />
+                  <input
+                    value={dock.name}
+                    onChange={(e) =>
+                      setLocalDocks((prev) =>
+                        prev.map((d, idx) => idx === i ? { ...d, name: e.target.value } : d)
+                      )
+                    }
+                    className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                  <span className={`text-[9px] font-bold px-2 py-1 rounded-lg uppercase ${
+                    dock.enabled ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-400"
+                  }`}>
+                    {dock.enabled ? "Active" : "Off"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ── Work Hours Tab ── */}
+          {tab === "hours" && (
+            <div className="space-y-4">
+              <p className="text-[10px] text-slate-400 leading-relaxed">
+                Set the operating hours for all docks. Slots are generated in {SLOT_DURATION_MINS}-minute intervals within this range.
+              </p>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                    Start Hour (0–23)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={23}
+                    value={localHours.start}
+                    onChange={(e) => {
+                      setLocalHours((h) => ({ ...h, start: parseInt(e.target.value) || 0 }));
+                      setHoursError("");
+                    }}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                    End Hour (1–24)
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={24}
+                    value={localHours.end}
+                    onChange={(e) => {
+                      setLocalHours((h) => ({ ...h, end: parseInt(e.target.value) || 1 }));
+                      setHoursError("");
+                    }}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                </div>
+              </div>
+              {hoursError && (
+                <p className="text-xs text-red-500 font-medium">{hoursError}</p>
+              )}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                <p className="text-xs text-slate-500">
+                  Preview:{" "}
+                  <span className="font-bold text-slate-700">
+                    {String(localHours.start).padStart(2, "0")}:00 –{" "}
+                    {String(localHours.end).padStart(2, "0")}:00
+                  </span>{" "}
+                  ={" "}
+                  <span className="font-bold text-indigo-600">
+                    {(localHours.end - localHours.start) * (60 / SLOT_DURATION_MINS)} slots
+                  </span>{" "}
+                  per dock per day
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* ── Holidays Tab ── */}
+          {tab === "holidays" && (
+            <div className="space-y-4">
+              <p className="text-[10px] text-slate-400 leading-relaxed">
+                Add individual holiday dates or import preset national calendars. Holiday dates are blocked and shown as closed on the schedule.
+              </p>
+
+              {/* Add single date */}
+              <div className="flex gap-2">
+                <input
+                  type="date"
+                  value={newHolidayDate}
+                  onChange={(e) => setNewHolidayDate(e.target.value)}
+                  className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                />
+                <button
+                  onClick={addHoliday}
+                  disabled={!newHolidayDate}
+                  className="px-4 py-2.5 bg-red-500 text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-red-600 disabled:opacity-40 transition-colors"
+                >
+                  + Add
+                </button>
+              </div>
+
+              {/* Preset imports */}
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">
+                  Quick Import by Country
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  {Object.entries(PRESET_HOLIDAYS).map(([key, val]) => (
+                    <button
+                      key={key}
+                      onClick={() => importPreset(key)}
+                      className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-600 transition-all text-left"
+                    >
+                      🗓 {val.label} ({val.dates.length} dates)
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Current list */}
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">
+                  Current Holidays ({localHolidays.length})
+                </p>
+                {localHolidays.length === 0 ? (
+                  <p className="text-xs italic text-slate-400">No holidays configured.</p>
+                ) : (
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                    {localHolidays.map((d) => (
+                      <div
+                        key={d}
+                        className="flex items-center justify-between bg-red-50 border border-red-100 rounded-lg px-3 py-2"
+                      >
+                        <span className="text-xs font-bold text-red-700">{d}</span>
+                        <button
+                          onClick={() => setLocalHolidays((prev) => prev.filter((x) => x !== d))}
+                          className="p-1 hover:bg-red-100 rounded-lg transition-colors"
+                        >
+                          <X className="w-3 h-3 text-red-400" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex gap-3 p-6 border-t border-slate-100">
+          <button
+            onClick={onClose}
+            className="flex-1 px-6 py-3 border border-slate-200 rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-slate-50 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            className="flex-1 px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all"
+          >
+            Apply Changes
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+// ─── Amend Modal ──────────────────────────────────────────────────────────────
+
+function AmendModal({
+  booking,
+  docks,
+  workHours,
+  onSave,
+  onDelete,
+  onClose,
+}: {
+  booking: Booking;
+  docks: Dock[];
+  workHours: WorkHours;
+  onSave: (updated: Booking) => void;
+  onDelete: (id: string) => void;
+  onClose: () => void;
+}) {
+  const startDate = parseISO(booking.startTime);
+  const [date, setDate] = useState(format(startDate, "yyyy-MM-dd"));
+  const [time, setTime] = useState(format(startDate, "HH:mm"));
+  const [dockId, setDockId] = useState(booking.dockId);
+  const [requesterName, setRequesterName] = useState(booking.requesterName);
+  const [truckReference, setTruckReference] = useState(booking.truckReference);
+  const [driverName, setDriverName] = useState(booking.driverName);
+  const [driverPhone, setDriverPhone] = useState(booking.driverPhone);
+  const [licensePlate, setLicensePlate] = useState(booking.licensePlate);
+
+  // Build allowed times for the select
+  const allowedTimes: string[] = [];
+  for (let h = workHours.start; h < workHours.end; h++) {
+    for (let m = 0; m < 60; m += SLOT_DURATION_MINS) {
+      allowedTimes.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
+    }
+  }
+
+  const handleSave = () => {
+    const newStart = parseISO(`${date}T${time}:00`);
+    const newEnd = addMinutes(newStart, SLOT_DURATION_MINS);
+    onSave({
+      ...booking,
+      dockId,
+      startTime: newStart.toISOString(),
+      endTime: newEnd.toISOString(),
+      requesterName,
+      truckReference,
+      driverName,
+      driverPhone,
+      licensePlate,
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 bg-[#141414]/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <motion.div
+        initial={{ scale: 0.9, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.9, opacity: 0 }}
+        className="bg-white rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl"
+      >
+        <div className="bg-amber-600 p-6 text-white">
+          <h3 className="text-xl font-bold tracking-tight">AMEND BOOKING</h3>
+          <p className="text-[10px] font-bold uppercase opacity-60 tracking-widest mt-1">
+            ID: {booking.id} · {booking.type}
+          </p>
+        </div>
+
+        <div className="p-8 space-y-5 max-h-[70vh] overflow-y-auto">
+          {/* Reschedule */}
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-800 mb-3">
+              Reschedule
+            </p>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                  New Date
+                </label>
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                  New Time
+                </label>
+                <select
+                  value={time}
+                  onChange={(e) => setTime(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+                >
+                  {allowedTimes.map((t) => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="space-y-2 mt-4">
+              <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                Dock
+              </label>
+              <select
+                value={dockId}
+                onChange={(e) => setDockId(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+              >
+                {docks.filter((d) => d.enabled).map((d) => (
+                  <option key={d.id} value={d.id}>{d.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="h-px bg-slate-100" />
+
+          {/* Update Details */}
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-800 mb-3">
+              Update Details
+            </p>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1">
+                  <User className="w-3 h-3" /> Requester
+                </label>
+                <input
+                  value={requesterName}
+                  onChange={(e) => setRequesterName(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1">
+                  <FileText className="w-3 h-3" /> Reference ID
+                </label>
+                <input
+                  value={truckReference}
+                  onChange={(e) => setTruckReference(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4 mt-4">
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1">
+                  <User className="w-3 h-3" /> Driver Name
+                </label>
+                <input
+                  value={driverName}
+                  onChange={(e) => setDriverName(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1">
+                  <Phone className="w-3 h-3" /> Phone
+                </label>
+                <input
+                  value={driverPhone}
+                  onChange={(e) => setDriverPhone(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+                />
+              </div>
+            </div>
+            <div className="space-y-2 mt-4">
+              <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1">
+                <Hash className="w-3 h-3" /> License Plate
+              </label>
+              <input
+                value={licensePlate}
+                onChange={(e) => setLicensePlate(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="flex gap-3 px-8 pb-8">
+          <button
+            onClick={onClose}
+            className="flex-1 px-6 py-3 border border-slate-200 rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-slate-50 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onDelete(booking.id)}
+            className="px-6 py-3 bg-red-50 text-red-600 border border-red-200 rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-red-100 transition-colors flex items-center gap-2"
+          >
+            <Trash2 className="w-3.5 h-3.5" /> Delete
+          </button>
+          <button
+            onClick={handleSave}
+            className="flex-1 px-6 py-3 bg-amber-500 text-white rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-amber-600 shadow-lg shadow-amber-200 transition-all"
+          >
+            Save Changes
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+// ─── Main App ─────────────────────────────────────────────────────────────────
+
 export default function App() {
-  const [view, setView] = useState<'requester' | 'inbound'>('requester');
+  const [view, setView] = useState<"requester" | "inbound">("requester");
+  const [calView, setCalView] = useState<"day" | "week" | "month">("day");
   const [selectedDate, setSelectedDate] = useState(new Date());
-  const [bookings, setBookings] = useState<Booking[]>([]); // Mock state until Firebase
+  const [selectedSlot, setSelectedSlot] = useState<{ dockId: string; time: Date } | null>(null);
+
+  // New feature states
+  const [docks, setDocks] = useState<Dock[]>(INITIAL_DOCKS);
+  const [workHours, setWorkHours] = useState<WorkHours>({ start: 7, end: 15 });
+  const [holidays, setHolidays] = useState<string[]>([]);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [amendingBooking, setAmendingBooking] = useState<Booking | null>(null);
+
+  const [bookings, setBookings] = useState<Booking[]>(() => {
+    try {
+      const saved = localStorage.getItem("dock-schedular-bookings");
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
   const [isAIModalOpen, setIsAIModalOpen] = useState(false);
-  const [aiInput, setAiInput] = useState('');
+  const [aiInput, setAiInput] = useState("");
   const [isExtracting, setIsExtracting] = useState(false);
-  const [selectedSlot, setSelectedSlot] = useState<{ dockId: string, time: Date } | null>(null);
 
-  // Generate time slots for the day
+  useEffect(() => {
+    localStorage.setItem("dock-schedular-bookings", JSON.stringify(bookings));
+  }, [bookings]);
+
+  const activeDocks = useMemo(() => docks.filter((d) => d.enabled), [docks]);
+
+  const exportToExcel = () => {
+    const wb = XLSX.utils.book_new();
+    const headers = ["Booking ID","Dock","Start Time","End Time","Requester","Reference","Driver","Phone","License Plate","Type","Created At"];
+    const rows = bookings.map((b) => [b.id, b.dockId, b.startTime, b.endTime, b.requesterName, b.truckReference, b.driverName, b.driverPhone, b.licensePlate, b.type, b.createdAt]);
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    XLSX.utils.book_append_sheet(wb, ws, "Bookings");
+    XLSX.writeFile(wb, `dock-schedule-${format(new Date(), "yyyy-MM-dd")}.xlsx`);
+  };
+
   const timeSlots = useMemo(() => {
     const slots: Date[] = [];
-    let current = setMinutes(setHours(startOfDay(selectedDate), WORKING_HOURS_START), 0);
-    const end = setHours(startOfDay(selectedDate), WORKING_HOURS_END);
-
+    let current = setMinutes(setHours(startOfDay(selectedDate), workHours.start), 0);
+    const end = setHours(startOfDay(selectedDate), workHours.end);
     while (current < end) {
       slots.push(new Date(current));
       current = addMinutes(current, SLOT_DURATION_MINS);
     }
     return slots;
-  }, [selectedDate]);
+  }, [selectedDate, workHours]);
+
+  const handlePrev = () => {
+    if (calView === "day") setSelectedDate((d) => addMinutes(d, -1440));
+    else if (calView === "week") setSelectedDate((d) => addDays(d, -7));
+    else setSelectedDate((d) => subMonths(d, 1));
+  };
+  const handleNext = () => {
+    if (calView === "day") setSelectedDate((d) => addMinutes(d, 1440));
+    else if (calView === "week") setSelectedDate((d) => addDays(d, 7));
+    else setSelectedDate((d) => addMonths(d, 1));
+  };
+  const handleDayClick = (date: Date) => {
+    setSelectedDate(date);
+    setCalView("day");
+  };
+
+  const isWeekendDay = selectedDate.getDay() === 0 || selectedDate.getDay() === 6;
+  const isHolidayDay = holidays.includes(format(selectedDate, "yyyy-MM-dd"));
+
+  const todayBookingsCount = bookings.filter((b) =>
+    isSameDay(parseISO(b.startTime), selectedDate)
+  ).length;
+  const maxSlots = activeDocks.length * timeSlots.length * TRUCKS_PER_SLOT;
+  const workloadPercent = Math.min(Math.round((todayBookingsCount / maxSlots) * 100), 100);
+
+  const headerDateLabel = useMemo(() => {
+    if (calView === "day") return format(selectedDate, "EEEE, MMM do");
+    if (calView === "week") {
+      const ws = startOfWeek(selectedDate, { weekStartsOn: 1 });
+      const we = addDays(ws, 6);
+      return `${format(ws, "MMM d")} – ${format(we, "MMM d, yyyy")}`;
+    }
+    return format(selectedDate, "MMMM yyyy");
+  }, [calView, selectedDate]);
 
   const handleBooking = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!selectedSlot) return;
-
     const formData = new FormData(e.currentTarget);
-    const truckCount = parseInt(formData.get('truckCount') as string) || 1;
-    const bookingTime = selectedSlot.time;
+    const truckCount = parseInt(formData.get("truckCount") as string) || 1;
     const newBookings: Booking[] = [];
-
     for (let i = 0; i < truckCount; i++) {
-      // Group trucks into slots based on capacity (TRUCKS_PER_SLOT = 2)
       const slotOffset = Math.floor(i / TRUCKS_PER_SLOT);
-      const startTime = addMinutes(bookingTime, slotOffset * SLOT_DURATION_MINS);
+      const startTime = addMinutes(selectedSlot.time, slotOffset * SLOT_DURATION_MINS);
       const endTime = addMinutes(startTime, SLOT_DURATION_MINS);
-      
-      const booking: Booking = {
+      newBookings.push({
         id: Math.random().toString(36).substr(2, 9),
         dockId: selectedSlot.dockId,
         startTime: startTime.toISOString(),
         endTime: endTime.toISOString(),
-        requesterName: formData.get('requesterName') as string,
-        // If there are multiple trucks, we append a sequence number to the reference
-        truckReference: truckCount > 1 ? `${formData.get('truckReference')} (#${i+1})` : formData.get('truckReference') as string,
-        driverName: formData.get('driverName') as string,
-        driverPhone: formData.get('driverPhone') as string,
-        licensePlate: formData.get('licensePlate') as string,
-        type: 'manual',
+        requesterName: formData.get("requesterName") as string,
+        truckReference: truckCount > 1 ? `${formData.get("truckReference")} (#${i + 1})` : (formData.get("truckReference") as string),
+        driverName: formData.get("driverName") as string,
+        driverPhone: formData.get("driverPhone") as string,
+        licensePlate: formData.get("licensePlate") as string,
+        type: "manual",
         createdAt: new Date().toISOString(),
-      };
-      newBookings.push(booking);
+      });
     }
-
-    setBookings(prev => [...prev, ...newBookings]);
+    setBookings((prev) => [...prev, ...newBookings]);
     setIsBookingModalOpen(false);
+    setSelectedSlot(null);
+  };
+
+  const handleAmendSave = (updated: Booking) => {
+    setBookings((prev) => prev.map((b) => b.id === updated.id ? updated : b));
+    setAmendingBooking(null);
+    setSelectedSlot(null);
+  };
+
+  const handleAmendDelete = (id: string) => {
+    setBookings((prev) => prev.filter((b) => b.id !== id));
+    setAmendingBooking(null);
+    setSelectedSlot(null);
+  };
+
+  const handleSettingsSave = (newDocks: Dock[], newHours: WorkHours, newHolidays: string[]) => {
+    setDocks(newDocks);
+    setWorkHours(newHours);
+    setHolidays(newHolidays);
+    setIsSettingsOpen(false);
     setSelectedSlot(null);
   };
 
   const handleAIExtract = async () => {
     setIsExtracting(true);
     try {
-      const extracted = await extractPlanningFromText(aiInput);
-      const newBookings: Booking[] = extracted.map(e => ({
-        id: Math.random().toString(36).substr(2, 9),
-        dockId: DOCKS[Math.floor(Math.random() * DOCKS.length)].id, // Auto-assign to a dock
-        startTime: `${e.suggestedDate}T${e.suggestedTime}:00Z`,
-        endTime: addMinutes(parseISO(`${e.suggestedDate}T${e.suggestedTime}:00Z`), SLOT_DURATION_MINS).toISOString(),
-        requesterName: e.requesterName,
-        truckReference: e.truckReference,
-        driverName: e.driverName || 'N/A',
-        driverPhone: e.driverPhone || 'N/A',
-        licensePlate: e.licensePlate || 'N/A',
-        type: 'automatic',
-        createdAt: new Date().toISOString(),
-      }));
-      setBookings(prev => [...prev, ...newBookings]);
+      // Replace this block with your actual geminiService call
+      // const extracted = await extractPlanningFromText(aiInput);
+      // For now, a simple demo parse:
+      const lines = aiInput.split("\n").filter((l) => l.trim());
+      const newBookings: Booking[] = [];
+      lines.forEach((line) => {
+        const timeMatch = line.match(/\b(\d{1,2})[:.h](\d{2})\b/);
+        const nameMatch = line.match(/([A-Z][a-z]+(?: [A-Z][a-z]+)+|[A-Z]+ (?:Logistics|Transport|Shipping))/);
+        if (timeMatch && nameMatch) {
+          const h = parseInt(timeMatch[1]), m = parseInt(timeMatch[2]);
+          const start = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate(), h, m, 0);
+          const dock = activeDocks[newBookings.length % activeDocks.length];
+          if (dock) {
+            newBookings.push({
+              id: Math.random().toString(36).substr(2, 9),
+              dockId: dock.id,
+              startTime: start.toISOString(),
+              endTime: addMinutes(start, SLOT_DURATION_MINS).toISOString(),
+              requesterName: nameMatch[0],
+              truckReference: `AI-${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
+              driverName: "N/A", driverPhone: "N/A", licensePlate: "N/A",
+              type: "automatic",
+              createdAt: new Date().toISOString(),
+            });
+          }
+        }
+      });
+      setBookings((prev) => [...prev, ...newBookings]);
       setIsAIModalOpen(false);
-      setAiInput('');
-    } catch (error) {
-      alert("Failed to extract planning. Make sure GEMINI_API_KEY is set.");
+      setAiInput("");
+    } catch {
+      alert("Failed to extract planning.");
     } finally {
       setIsExtracting(false);
     }
   };
 
-  const isWeekend = selectedDate.getDay() === 0 || selectedDate.getDay() === 6;
-
-  const todayBookingsCount = bookings.filter(b => isSameDay(parseISO(b.startTime), selectedDate)).length;
-  const maxSlots = DOCKS.length * timeSlots.length * TRUCKS_PER_SLOT;
-  const workloadPercent = Math.min(Math.round((todayBookingsCount / maxSlots) * 100), 100);
-
   return (
-    <div className="min-h-screen bg-zinc-100 text-slate-900 font-sans p-6 text-slate-900">
-      {/* Header Section */}
+    <div className="min-h-screen bg-zinc-100 text-slate-900 font-sans p-6">
+      {/* Header */}
       <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-800 uppercase">Dock Scheduler</h1>
-          <p className="text-sm text-slate-500 font-medium">Terminal Hub • {format(selectedDate, 'EEEE, MMM do')}</p>
+          <p className="text-sm text-slate-500 font-medium">Terminal Hub • {headerDateLabel}</p>
         </div>
-        
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm">
-            <div className={`w-2 h-2 rounded-full ${bookings.length > 0 ? 'bg-emerald-500' : 'bg-amber-500'} animate-pulse`}></div>
+            <div className={`w-2 h-2 rounded-full ${bookings.length > 0 ? "bg-emerald-500" : "bg-amber-500"} animate-pulse`} />
             <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">
-              {bookings.length > 0 ? 'DATA STREAM: ACTIVE' : 'SYSTEM IDLE'}
+              {bookings.length > 0 ? "DATA STREAM: ACTIVE" : "SYSTEM IDLE"}
             </span>
           </div>
 
+          {/* Settings button — NEW */}
+          <button
+            onClick={() => setIsSettingsOpen(true)}
+            className="flex items-center gap-2 bg-white border border-slate-200 shadow-sm px-3 py-1.5 rounded-lg text-[10px] font-bold text-slate-600 uppercase tracking-wider hover:bg-slate-50 transition-colors"
+          >
+            <Settings className="w-3.5 h-3.5" /> Settings
+          </button>
+
           <div className="flex bg-white rounded-xl border border-slate-200 shadow-sm p-1">
-            <button 
-              onClick={() => setView('requester')}
-              className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${view === 'requester' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-600'}`}
-            >
-              BOOKING
-            </button>
-            <button 
-              onClick={() => setView('inbound')}
-              className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${view === 'inbound' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-600'}`}
-            >
-              INBOUND
-            </button>
+            <button onClick={() => setView("requester")} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${view === "requester" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-600"}`}>BOOKING</button>
+            <button onClick={() => setView("inbound")} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${view === "inbound" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-600"}`}>INBOUND</button>
+          </div>
+
+          <div className="flex bg-white rounded-xl border border-slate-200 shadow-sm p-1">
+            {(["day", "week", "month"] as const).map((v) => (
+              <button key={v} onClick={() => setCalView(v)} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all capitalize ${calView === v ? "bg-slate-800 text-white" : "text-slate-400 hover:text-slate-600"}`}>
+                {v.toUpperCase()}
+              </button>
+            ))}
           </div>
 
           <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200 shadow-sm">
-            <button onClick={() => setSelectedDate(d => addMinutes(d, -1440))} className="p-1.5 hover:bg-slate-50 rounded-lg"><ChevronLeft className="w-4 h-4 text-slate-400" /></button>
-            <button onClick={() => setSelectedDate(d => addMinutes(d, 1440))} className="p-1.5 hover:bg-slate-50 rounded-lg"><ChevronRight className="w-4 h-4 text-slate-400" /></button>
+            <button onClick={handlePrev} className="p-1.5 hover:bg-slate-50 rounded-lg"><ChevronLeft className="w-4 h-4 text-slate-400" /></button>
+            <button onClick={handleNext} className="p-1.5 hover:bg-slate-50 rounded-lg"><ChevronRight className="w-4 h-4 text-slate-400" /></button>
           </div>
+
+          <button
+            onClick={exportToExcel}
+            className="group relative overflow-hidden rounded-2xl bg-emerald-600 px-6 py-3 text-sm font-bold uppercase tracking-wider text-white shadow-lg shadow-emerald-200 transition-all duration-300 hover:-translate-y-0.5 hover:bg-emerald-700 active:scale-[0.98] cursor-pointer"
+          >
+            <span className="relative flex items-center gap-2"><FileText className="h-4 w-4" />Export Excel</span>
+          </button>
         </div>
       </header>
 
-      {/* Main Bento Layout */}
+      {/* Bento Layout */}
       <div className="grid grid-cols-12 grid-rows-6 gap-4 h-[calc(100vh-140px)]">
-        
-        {/* Left Column: Stats & Logs */}
+
+        {/* Left Column */}
         <div className="col-span-3 row-span-6 flex flex-col gap-4">
-          {/* Workload Snapshot */}
           <div className="flex-1 bg-white rounded-2xl border border-slate-200 p-5 shadow-sm flex flex-col justify-between">
             <div>
               <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Today's Workload</h3>
-              <div className="text-3xl font-black text-indigo-600">{todayBookingsCount} <span className="text-lg font-normal text-slate-400">/ {maxSlots}</span></div>
+              <div className="text-3xl font-black text-indigo-600">
+                {todayBookingsCount} <span className="text-lg font-normal text-slate-400">/ {maxSlots}</span>
+              </div>
               <p className="text-[10px] text-slate-500 mt-1">Confirmed bookings across all docks</p>
             </div>
             <div className="space-y-2 mt-4">
               <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                <div className="bg-indigo-500 h-full transition-all duration-500" style={{ width: `${workloadPercent}%` }}></div>
+                <div className="bg-indigo-500 h-full transition-all duration-500" style={{ width: `${workloadPercent}%` }} />
               </div>
               <div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase">
-                <span>07:00 AM</span>
+                <span>{String(workHours.start).padStart(2, "0")}:00</span>
                 <span>{workloadPercent}% Utilization</span>
-                <span>03:00 PM</span>
+                <span>{String(workHours.end).padStart(2, "0")}:00</span>
               </div>
             </div>
           </div>
 
-          {/* AI Import Trigger (Sync Status variant) */}
           <div className="flex-1 bg-emerald-500 text-white rounded-2xl p-5 shadow-sm flex flex-col justify-between">
             <div>
               <div className="flex justify-between items-start mb-2">
@@ -209,24 +1095,23 @@ export default function App() {
               </div>
               <p className="text-xs font-medium leading-tight mb-4">Automatically extract bookings from planning notes or container lists.</p>
             </div>
-            
-            <button 
-              onClick={() => setIsAIModalOpen(true)}
-              className="w-full bg-white text-emerald-600 py-2.5 rounded-xl text-xs font-bold shadow-lg hover:bg-emerald-50 transition-colors"
-            >
+            <button onClick={() => setIsAIModalOpen(true)} className="w-full bg-white text-emerald-600 py-2.5 rounded-xl text-xs font-bold shadow-lg hover:bg-emerald-50 transition-colors">
               SYNC FROM DOCUMENT
             </button>
           </div>
 
-          {/* Planning Logs */}
           <div className="flex-1 bg-white rounded-2xl border border-slate-200 p-5 shadow-sm overflow-hidden flex flex-col">
             <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-4">Operations Log</h3>
             <div className="space-y-3 flex-1 overflow-y-auto pr-2">
-              {bookings.slice(-5).reverse().map(b => (
+              {bookings.slice(-5).reverse().map((b) => (
                 <div key={b.id} className="flex gap-3 items-start animate-in fade-in slide-in-from-left-2 duration-300">
-                  <div className={`w-1.5 h-1.5 mt-1.5 rounded-full ${b.type === 'automatic' ? 'bg-emerald-500' : 'bg-indigo-500'}`}></div>
+                  <div className={`w-1.5 h-1.5 mt-1.5 rounded-full ${b.type === "automatic" ? "bg-emerald-500" : "bg-indigo-500"}`} />
                   <div>
-                    <p className="text-[10px] leading-tight text-slate-600"><span className="font-bold">{format(parseISO(b.createdAt), 'HH:mm')}</span> Slot {format(parseISO(b.startTime), 'HH:mm')} (Dock {b.dockId.split('-')[1]}) {b.type === 'automatic' ? 'synced' : 'booked'}</p>
+                    <p className="text-[10px] leading-tight text-slate-600">
+                      <span className="font-bold">{format(parseISO(b.createdAt), "HH:mm")}</span>{" "}
+                      Slot {format(parseISO(b.startTime), "HH:mm")} ({b.dockId.split("-")[1] ? `Dock ${b.dockId.split("-")[1]}` : b.dockId}){" "}
+                      {b.type === "automatic" ? "synced" : "booked"}
+                    </p>
                     <p className="text-[9px] text-slate-400 uppercase mt-0.5">{b.licensePlate}</p>
                   </div>
                 </div>
@@ -236,190 +1121,245 @@ export default function App() {
           </div>
         </div>
 
-        {/* Center Column: Main Schedule Grid */}
+        {/* Center Column */}
         <div className="col-span-6 row-span-6 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
-          <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
-            <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Dock Availability (15m Intervals)</h3>
+          <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center shrink-0">
+            <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+              {calView === "day" && "Dock Availability (15m Intervals)"}
+              {calView === "week" && "Weekly Overview — All Docks"}
+              {calView === "month" && `Monthly Overview — ${format(selectedDate, "MMMM yyyy")}`}
+            </h3>
             <div className="flex gap-4 text-[9px] font-bold text-slate-500 tracking-wider">
-              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-100 border border-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.3)]"></span> AVAILABLE</div>
-              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-amber-100 border border-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.3)]"></span> PARTIAL</div>
-              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-red-100 border border-red-400 shadow-[0_0_8px_rgba(248,113,113,0.3)]"></span> FULL</div>
+              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-100 border border-emerald-400" /> AVAILABLE</div>
+              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-amber-100 border border-amber-400" /> PARTIAL</div>
+              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-red-100 border border-red-400" /> FULL</div>
+              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-red-200 border border-red-500" /> HOLIDAY</div>
             </div>
           </div>
 
-          <div className="grid grid-cols-[80px_repeat(4,1fr)] bg-slate-50/30 border-b border-slate-100">
-            <div className="p-2 text-center text-[10px] font-bold text-slate-400 uppercase tracking-widest border-r border-slate-100 italic">TIME</div>
-            {DOCKS.map(dock => (
-              <div key={dock.id} className="p-2 text-center text-[10px] font-black text-slate-500 uppercase tracking-widest border-r border-slate-100 last:border-r-0">
-                {dock.name}
+          {/* Day View */}
+          {calView === "day" && (
+            <>
+              <div
+                className="grid bg-slate-50/30 border-b border-slate-100 shrink-0"
+                style={{ gridTemplateColumns: `80px repeat(${activeDocks.length}, 1fr)` }}
+              >
+                <div className="p-2 text-center text-[10px] font-bold text-slate-400 uppercase tracking-widest border-r border-slate-100 italic">TIME</div>
+                {activeDocks.map((dock) => (
+                  <div key={dock.id} className="p-2 text-center text-[10px] font-black text-slate-500 uppercase tracking-widest border-r border-slate-100 last:border-r-0">
+                    {dock.name}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
 
-          <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-200 relative">
-            {isWeekend && (
-              <div className="absolute inset-0 z-20 bg-slate-50/80 backdrop-blur-[2px] flex flex-col items-center justify-center p-12 text-center">
-                <div className="w-16 h-16 bg-slate-200 rounded-full flex items-center justify-center mb-4">
-                  <Calendar className="w-8 h-8 text-slate-400" />
-                </div>
-                <h4 className="text-lg font-bold text-slate-800 uppercase tracking-tight">Terminal Closed</h4>
-                <p className="text-sm text-slate-500 mt-2 max-w-xs leading-relaxed">Dock operations are only available Monday through Friday (07:00 - 15:00).</p>
-              </div>
-            )}
-            {timeSlots.map(time => (
-              <div key={time.toISOString()} className="grid grid-cols-[80px_repeat(4,1fr)] border-b border-slate-100 last:border-0 group min-h-[48px]">
-                <div className={`p-4 font-mono text-[10px] font-bold items-center justify-center flex border-r border-slate-100 transition-colors ${format(time, 'HH:mm') === format(new Date(), 'HH:mm') ? 'bg-indigo-50 text-indigo-600' : 'bg-slate-50/30 text-slate-400'}`}>
-                  {format(time, 'HH:mm')}
-                </div>
-                {DOCKS.map(dock => {
-                  const currentBookings = bookings.filter(b => b.dockId === dock.id && isSameDay(parseISO(b.startTime), time) && format(parseISO(b.startTime), 'HH:mm') === format(time, 'HH:mm'));
-                  const isFull = currentBookings.length >= dock.capacity;
-                  const isPartial = currentBookings.length > 0 && currentBookings.length < dock.capacity;
-                  const isSelected = selectedSlot?.dockId === dock.id && format(selectedSlot.time, 'HH:mm') === format(time, 'HH:mm');
-                  const occupancyRatio = currentBookings.length / dock.capacity;
-
-                  return (
-                    <div 
-                      key={dock.id} 
-                      className={`p-1 border-r border-slate-100 last:border-r-0 relative group/slot transition-all ${isSelected ? 'bg-indigo-50/50' : ''}`}
-                    >
-                      {currentBookings.length > 0 ? (
-                        <div className="h-full w-full flex flex-col gap-1">
-                          {view === 'inbound' ? (
-                            <div className="h-full w-full flex flex-col justify-center px-1">
-                              <div className="flex justify-between items-center mb-1">
-                                <span className={`text-[7px] font-black uppercase ${isFull ? 'text-red-600' : 'text-amber-600'}`}>
-                                  {isFull ? 'OCCUPIED' : 'PARTIAL'}
-                                </span>
-                                <span className="text-[7px] font-bold text-slate-400">{currentBookings.length}/{dock.capacity}</span>
-                              </div>
-                              <div className="flex gap-0.5 h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                                {Array.from({ length: dock.capacity }).map((_, i) => (
-                                  <div 
-                                    key={i} 
-                                    className={`flex-1 h-full ${i < currentBookings.length ? (isFull ? 'bg-red-500' : 'bg-amber-500') : 'bg-transparent'}`}
-                                  />
-                                ))}
-                              </div>
-                              <div className="mt-1 flex flex-wrap gap-0.5">
-                                {currentBookings.map(b => (
-                                  <div key={b.id} className="text-[6px] font-bold truncate max-w-full text-slate-500 bg-white/50 px-0.5 rounded cursor-help" title={b.requesterName}>
-                                    {b.requesterName}
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          ) : (
-                            currentBookings.map(b => (
-                              <motion.div 
-                                initial={{ scale: 0.95, opacity: 0 }}
-                                animate={{ scale: 1, opacity: 1 }}
-                                key={b.id} 
-                                className={`flex-1 p-1 rounded border flex items-center justify-center text-[8px] font-black uppercase transition-all shadow-sm ${
-                                  isFull ? 'bg-red-50 border-red-200 text-red-700' : 'bg-amber-50 border-amber-200 text-amber-700'
-                                }`}
-                              >
-                                {b.requesterName}
-                              </motion.div>
-                            ))
-                          )}
-                          {!isFull && view === 'requester' && (
-                            <button 
-                              onClick={() => { setSelectedSlot({ dockId: dock.id, time }); setIsBookingModalOpen(true); }}
-                              className="flex-1 border border-dashed border-slate-300 rounded opacity-0 group-hover/slot:opacity-100 bg-white/50 flex items-center justify-center transition-opacity"
-                            >
-                              <Plus className="w-2.5 h-2.5 text-slate-400" />
-                            </button>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="h-full w-full flex items-center justify-center">
-                          {view === 'requester' ? (
-                            <button 
-                              onClick={() => { setSelectedSlot({ dockId: dock.id, time }); setIsBookingModalOpen(true); }}
-                              className="w-full h-full bg-emerald-50/30 rounded opacity-0 group-hover/slot:opacity-100 hover:bg-emerald-100/50 flex items-center justify-center transition-all cursor-pointer"
-                            >
-                              <Plus className="w-4 h-4 text-emerald-500" />
-                            </button>
-                          ) : (
-                            <div className="h-full w-full flex flex-col justify-center px-1 opacity-40">
-                              <div className="flex justify-between items-center mb-1">
-                                <span className="text-[7px] font-black uppercase text-emerald-600">AVAILABLE</span>
-                                <span className="text-[7px] font-bold text-slate-400">0/{dock.capacity}</span>
-                              </div>
-                              <div className="w-full h-1.5 bg-slate-100 rounded-full border border-slate-200/50" />
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      
-                      {isSelected && (
-                        <div className="absolute inset-0 bg-indigo-600 border border-indigo-700 rounded-sm z-[2] flex flex-col items-center justify-center text-[8px] font-black text-white uppercase shadow-lg">
-                          SELECTED
-                        </div>
-                      )}
+              <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-200 relative">
+                {/* Weekend Overlay */}
+                {isWeekendDay && (
+                  <div className="absolute inset-0 z-20 bg-slate-50/80 backdrop-blur-[2px] flex flex-col items-center justify-center p-12 text-center">
+                    <div className="w-16 h-16 bg-slate-200 rounded-full flex items-center justify-center mb-4">
+                      <Calendar className="w-8 h-8 text-slate-400" />
                     </div>
-                  );
-                })}
+                    <h4 className="text-lg font-bold text-slate-800 uppercase tracking-tight">Terminal Closed</h4>
+                    <p className="text-sm text-slate-500 mt-2 max-w-xs leading-relaxed">
+                      Dock operations are only available Monday through Friday.
+                    </p>
+                  </div>
+                )}
+
+                {/* Holiday Overlay — NEW */}
+                {!isWeekendDay && isHolidayDay && (
+                  <div className="absolute inset-0 z-20 bg-red-50/90 backdrop-blur-[2px] flex flex-col items-center justify-center p-12 text-center">
+                    <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-4">
+                      <Calendar className="w-8 h-8 text-red-400" />
+                    </div>
+                    <h4 className="text-lg font-bold text-red-700 uppercase tracking-tight">Holiday — Terminal Closed</h4>
+                    <p className="text-sm text-red-400 mt-2 max-w-xs leading-relaxed">
+                      {format(selectedDate, "MMMM do, yyyy")} is a scheduled holiday. No bookings available.
+                    </p>
+                  </div>
+                )}
+
+                {timeSlots.map((time) => (
+                  <div
+                    key={time.toISOString()}
+                    className="border-b border-slate-100 last:border-0 group min-h-12"
+                    style={{ display: "grid", gridTemplateColumns: `80px repeat(${activeDocks.length}, 1fr)` }}
+                  >
+                    <div className={`p-4 font-mono text-[10px] font-bold items-center justify-center flex border-r border-slate-100 transition-colors ${format(time, "HH:mm") === format(new Date(), "HH:mm") ? "bg-indigo-50 text-indigo-600" : "bg-slate-50/30 text-slate-400"}`}>
+                      {format(time, "HH:mm")}
+                    </div>
+                    {activeDocks.map((dock) => {
+                      const currentBookings = bookings.filter(
+                        (b) => b.dockId === dock.id && isSameDay(parseISO(b.startTime), time) && format(parseISO(b.startTime), "HH:mm") === format(time, "HH:mm")
+                      );
+                      const isFull = currentBookings.length >= TRUCKS_PER_SLOT;
+                      const isSelected = selectedSlot?.dockId === dock.id && format(selectedSlot.time, "HH:mm") === format(time, "HH:mm");
+
+                      return (
+                        <div key={dock.id} className={`p-1 border-r border-slate-100 last:border-r-0 relative group/slot transition-all ${isSelected ? "bg-indigo-50/50" : ""}`}>
+                          {currentBookings.length > 0 ? (
+                            <div className="h-full w-full flex flex-col gap-1">
+                              {view === "inbound" ? (
+                                <div className="h-full w-full flex flex-col justify-center px-1">
+                                  <div className="flex justify-between items-center mb-1">
+                                    <span className={`text-[7px] font-black uppercase ${isFull ? "text-red-600" : "text-amber-600"}`}>{isFull ? "OCCUPIED" : "PARTIAL"}</span>
+                                    <span className="text-[7px] font-bold text-slate-400">{currentBookings.length}/{TRUCKS_PER_SLOT}</span>
+                                  </div>
+                                  <div className="flex gap-0.5 h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                                    {Array.from({ length: TRUCKS_PER_SLOT }).map((_, i) => (
+                                      <div key={i} className={`flex-1 h-full ${i < currentBookings.length ? (isFull ? "bg-red-500" : "bg-amber-500") : "bg-transparent"}`} />
+                                    ))}
+                                  </div>
+                                  <div className="mt-1 flex flex-wrap gap-0.5">
+                                    {currentBookings.map((b) => (
+                                      <div key={b.id} className="text-[6px] font-bold truncate max-w-full text-slate-500 bg-white/50 px-0.5 rounded cursor-help" title={b.requesterName}>
+                                        {b.requesterName}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : (
+                                currentBookings.map((b) => (
+                                  <motion.div
+                                    initial={{ scale: 0.95, opacity: 0 }}
+                                    animate={{ scale: 1, opacity: 1 }}
+                                    key={b.id}
+                                    onClick={() => setAmendingBooking(b)}
+                                    title="Click to amend"
+                                    className={`flex-1 p-1 rounded border flex items-center justify-center text-[8px] font-black uppercase transition-all shadow-sm cursor-pointer group/chip ${
+                                      isFull ? "bg-red-50 border-red-200 text-red-700 hover:bg-red-100" : "bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100"
+                                    }`}
+                                  >
+                                    <Edit className="w-2.5 h-2.5 mr-1 opacity-0 group-hover/chip:opacity-100 transition-opacity" />
+                                    {b.requesterName}
+                                  </motion.div>
+                                ))
+                              )}
+                              {!isFull && view === "requester" && (
+                                <button
+                                  onClick={() => { setSelectedSlot({ dockId: dock.id, time }); setIsBookingModalOpen(true); }}
+                                  className="flex-1 border border-dashed border-slate-300 rounded opacity-0 group-hover/slot:opacity-100 bg-white/50 flex items-center justify-center transition-opacity"
+                                >
+                                  <Plus className="w-2.5 h-2.5 text-slate-400" />
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="h-full w-full flex items-center justify-center">
+                              {view === "requester" ? (
+                                <button
+                                  onClick={() => { setSelectedSlot({ dockId: dock.id, time }); setIsBookingModalOpen(true); }}
+                                  className="w-full h-full bg-emerald-50/30 rounded opacity-0 group-hover/slot:opacity-100 hover:bg-emerald-100/50 flex items-center justify-center transition-all cursor-pointer"
+                                >
+                                  <Plus className="w-4 h-4 text-emerald-500" />
+                                </button>
+                              ) : (
+                                <div className="h-full w-full flex flex-col justify-center px-1 opacity-40">
+                                  <div className="flex justify-between items-center mb-1">
+                                    <span className="text-[7px] font-black uppercase text-emerald-600">AVAILABLE</span>
+                                    <span className="text-[7px] font-bold text-slate-400">0/{TRUCKS_PER_SLOT}</span>
+                                  </div>
+                                  <div className="w-full h-1.5 bg-slate-100 rounded-full border border-slate-200/50" />
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          {isSelected && (
+                            <div className="absolute inset-0 bg-indigo-600 border border-indigo-700 rounded-sm z-2 flex flex-col items-center justify-center text-[8px] font-black text-white uppercase shadow-lg">
+                              SELECTED
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </>
+          )}
+
+          {calView === "week" && (
+            <WeeklyView
+              selectedDate={selectedDate}
+              bookings={bookings}
+              holidays={holidays}
+              workHours={workHours}
+              docks={docks}
+              onDayClick={handleDayClick}
+            />
+          )}
+
+          {calView === "month" && (
+            <MonthlyView
+              selectedDate={selectedDate}
+              bookings={bookings}
+              holidays={holidays}
+              docks={docks}
+              workHours={workHours}
+              onDayClick={handleDayClick}
+            />
+          )}
         </div>
 
-        {/* Right Column: Detail Panel */}
+        {/* Right Column */}
         <div className="col-span-3 row-span-6 flex flex-col gap-4">
-          <div className="flex-[2] bg-slate-900 text-white rounded-2xl p-6 shadow-xl flex flex-col">
+          <div className="flex-2 bg-slate-900 text-white rounded-2xl p-6 shadow-xl flex flex-col">
             <div className="mb-6">
               <h3 className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-1">Slot Intelligence</h3>
               <div className="text-xl font-bold tracking-tight">Active Selection</div>
               <p className="text-[10px] text-slate-400 mt-1 uppercase font-semibold">Terminal Operations Center</p>
             </div>
-            
+
             <div className="space-y-4 flex-1 overflow-y-auto">
               {selectedSlot ? (
                 <div className="space-y-4 animate-in fade-in zoom-in-95">
-                   <div className="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                  <div className="bg-slate-800 p-4 rounded-xl border border-slate-700">
                     <label className="block text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">Current Slot</label>
                     <div className="text-sm font-bold flex items-center gap-2">
-                       <Clock className="w-3.5 h-3.5 text-indigo-400" />
-                       {format(selectedSlot.time, 'HH:mm')} - {format(addMinutes(selectedSlot.time, SLOT_DURATION_MINS), 'HH:mm')}
+                      <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                      {format(selectedSlot.time, "HH:mm")} – {format(addMinutes(selectedSlot.time, SLOT_DURATION_MINS), "HH:mm")}
                     </div>
                     <div className="text-xs text-slate-400 mt-1 flex items-center gap-2">
-                       <LayoutDashboard className="w-3.5 h-3.5" />
-                       {DOCKS.find(d => d.id === selectedSlot.dockId)?.name}
+                      <LayoutDashboard className="w-3.5 h-3.5" />
+                      {docks.find((d) => d.id === selectedSlot.dockId)?.name}
                     </div>
                   </div>
 
                   <div className="space-y-3">
                     <label className="block text-[9px] font-black text-slate-500 uppercase tracking-widest px-1">Occupancy</label>
-                    {bookings.filter(b => b.dockId === selectedSlot.dockId && format(parseISO(b.startTime), 'HH:mm') === format(selectedSlot.time, 'HH:mm')).length === 0 ? (
+                    {bookings.filter(
+                      (b) => b.dockId === selectedSlot.dockId && format(parseISO(b.startTime), "HH:mm") === format(selectedSlot.time, "HH:mm")
+                    ).length === 0 ? (
                       <div className="bg-indigo-500/10 p-4 rounded-xl border border-indigo-500/30 border-dashed text-center">
                         <p className="text-[10px] italic text-indigo-200/50 mb-3">No bookings assigned to this slot yet.</p>
-                        <button 
-                          onClick={() => setIsBookingModalOpen(true)}
-                          className="w-full bg-indigo-500 py-2 rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-indigo-400 transition-colors"
-                        >
+                        <button onClick={() => setIsBookingModalOpen(true)} className="w-full bg-indigo-500 py-2 rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-indigo-400 transition-colors">
                           ASSIGN NOW
                         </button>
                       </div>
                     ) : (
-                      bookings.filter(b => b.dockId === selectedSlot.dockId && format(parseISO(b.startTime), 'HH:mm') === format(selectedSlot.time, 'HH:mm')).map(b => (
+                      bookings.filter(
+                        (b) => b.dockId === selectedSlot.dockId && format(parseISO(b.startTime), "HH:mm") === format(selectedSlot.time, "HH:mm")
+                      ).map((b) => (
                         <div key={b.id} className="bg-slate-800 p-3 rounded-xl border border-slate-700 relative group overflow-hidden">
                           <div className="flex justify-between items-center mb-2">
-                             <div className="text-[8px] font-black text-indigo-400 uppercase">{b.truckReference}</div>
-                             <div className={`w-1.5 h-1.5 rounded-full ${b.type === 'automatic' ? 'bg-emerald-500' : 'bg-indigo-500'}`}></div>
+                            <div className="text-[8px] font-black text-indigo-400 uppercase">{b.truckReference}</div>
+                            <div className={`w-1.5 h-1.5 rounded-full ${b.type === "automatic" ? "bg-emerald-500" : "bg-indigo-500"}`} />
                           </div>
                           <div className="text-sm font-bold truncate">{b.requesterName}</div>
                           <div className="flex flex-col gap-1 mt-2">
-                            <div className="flex items-center gap-2 text-[10px] text-slate-400">
-                              <User className="w-3 h-3" /> {b.driverName}
-                            </div>
-                            <div className="flex items-center gap-2 text-[10px] text-indigo-300">
-                              <Truck className="w-3 h-3" /> {b.licensePlate}
-                            </div>
+                            <div className="flex items-center gap-2 text-[10px] text-slate-400"><User className="w-3 h-3" /> {b.driverName}</div>
+                            <div className="flex items-center gap-2 text-[10px] text-indigo-300"><Truck className="w-3 h-3" /> {b.licensePlate}</div>
                           </div>
-                          <button 
-                            onClick={() => setBookings(prev => prev.filter(item => item.id !== b.id))}
+                          {/* Amend button — NEW */}
+                          <button
+                            onClick={() => setAmendingBooking(b)}
+                            className="absolute -right-10 group-hover:right-14 top-2 p-1.5 bg-amber-500/10 text-amber-400 rounded-lg transition-all hover:bg-amber-500 hover:text-white"
+                            title="Amend booking"
+                          >
+                            <Edit className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={() => setBookings((prev) => prev.filter((item) => item.id !== b.id))}
                             className="absolute -right-10 group-hover:right-2 top-2 p-1.5 bg-red-500/10 text-red-400 rounded-lg transition-all hover:bg-red-500 hover:text-white"
                           >
                             <Plus className="w-3 h-3 rotate-45" />
@@ -442,10 +1382,9 @@ export default function App() {
 
             <div className="pt-6 border-t border-slate-800 mt-4 space-y-3">
               <div className="flex justify-between items-center text-[10px] uppercase font-black tracking-widest text-slate-500">
-                <span>Database</span>
-                <span className="text-emerald-500">Local Only</span>
+                <span>Database</span><span className="text-emerald-500">Local Only</span>
               </div>
-              <button 
+              <button
                 disabled={!selectedSlot}
                 onClick={() => setIsBookingModalOpen(true)}
                 className="w-full bg-white text-slate-900 py-3 rounded-xl text-xs font-black shadow-lg hover:bg-slate-100 transition-all disabled:opacity-50 tracking-widest"
@@ -455,7 +1394,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* User / Org Context (extra bento block) */}
           <div className="flex-1 bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
             <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">Operator</h3>
             <div className="flex items-center gap-3">
@@ -467,146 +1405,87 @@ export default function App() {
             </div>
           </div>
         </div>
-
       </div>
 
-      {/* Booking Modal */}
+      {/* Modals */}
       <AnimatePresence>
+        {/* Booking Modal */}
         {isBookingModalOpen && (
           <div className="fixed inset-0 bg-[#141414]/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl"
-            >
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl">
               <div className="bg-slate-900 p-6 text-white">
                 <h3 className="text-xl font-bold tracking-tight">CREATE BOOKING</h3>
                 <div className="flex gap-4 mt-2 text-[10px] font-black uppercase opacity-60 tracking-widest">
-                  <div className="flex items-center gap-2"><LayoutDashboard className="w-3 h-3" /> {DOCKS.find(d => d.id === selectedSlot?.dockId)?.name}</div>
-                  <div className="flex items-center gap-2"><Clock className="w-3 h-3" /> {selectedSlot && format(selectedSlot.time, 'HH:mm')} - {selectedSlot && format(addMinutes(selectedSlot.time, SLOT_DURATION_MINS), 'HH:mm')}</div>
+                  <div className="flex items-center gap-2"><LayoutDashboard className="w-3 h-3" />{docks.find((d) => d.id === selectedSlot?.dockId)?.name}</div>
+                  <div className="flex items-center gap-2"><Clock className="w-3 h-3" />{selectedSlot && format(selectedSlot.time, "HH:mm")} – {selectedSlot && format(addMinutes(selectedSlot.time, SLOT_DURATION_MINS), "HH:mm")}</div>
                 </div>
               </div>
-              
               <form onSubmit={handleBooking} className="p-8 space-y-6">
                 <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-2">
-                      <User className="w-3 h-3" /> REQUESTER
-                    </label>
-                    <input name="requesterName" required className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" placeholder="e.g. Global Logistics" />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-2">
-                      <Truck className="w-3 h-3" /> NUMBER OF TRUCKS
-                    </label>
-                    <input name="truckCount" type="number" min="1" max="10" defaultValue="1" required className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
-                  </div>
+                  <div className="space-y-2"><label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-2"><User className="w-3 h-3" />Requester</label><input name="requesterName" required className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" placeholder="e.g. Global Logistics" /></div>
+                  <div className="space-y-2"><label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-2"><Truck className="w-3 h-3" />No. of Trucks</label><input name="truckCount" type="number" min="1" max="10" defaultValue="1" required className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" /></div>
                 </div>
-
-                <div className="grid grid-cols-1 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-2">
-                      <FileText className="w-3 h-3" /> REFERENCE ID
-                    </label>
-                    <input name="truckReference" required className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" placeholder="PO-123456" />
-                  </div>
-                </div>
-
+                <div className="space-y-2"><label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-2"><FileText className="w-3 h-3" />Reference ID</label><input name="truckReference" required className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" placeholder="PO-123456" /></div>
                 <div className="h-px bg-slate-100" />
-
                 <div className="space-y-4">
                   <h4 className="text-[10px] font-bold uppercase tracking-widest text-slate-800">Operational Details</h4>
                   <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-2">
-                        <User className="w-3 h-3" /> Driver Name
-                      </label>
-                      <input name="driverName" required className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" placeholder="Driver Full Name" />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-2">
-                        <Phone className="w-3 h-3" /> Contact #
-                      </label>
-                      <input name="driverPhone" required className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" placeholder="+1..." />
-                    </div>
+                    <div className="space-y-2"><label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-2"><User className="w-3 h-3" />Driver Name</label><input name="driverName" required className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" placeholder="Full Name" /></div>
+                    <div className="space-y-2"><label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-2"><Phone className="w-3 h-3" />Contact #</label><input name="driverPhone" required className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" placeholder="+1..." /></div>
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-2">
-                      <Hash className="w-3 h-3" /> License Plate
-                    </label>
-                    <input name="licensePlate" required className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" placeholder="ABC-1234" />
-                  </div>
+                  <div className="space-y-2"><label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-2"><Hash className="w-3 h-3" />License Plate</label><input name="licensePlate" required className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" placeholder="ABC-1234" /></div>
                 </div>
-
                 <div className="flex gap-3 pt-4">
-                  <button 
-                    type="button" 
-                    onClick={() => setIsBookingModalOpen(false)}
-                    className="flex-1 px-6 py-3 border border-slate-200 rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-slate-50 transition-colors"
-                  >
-                    Discard
-                  </button>
-                  <button 
-                    type="submit"
-                    className="flex-1 px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all"
-                  >
-                    Confirm
-                  </button>
+                  <button type="button" onClick={() => setIsBookingModalOpen(false)} className="flex-1 px-6 py-3 border border-slate-200 rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-slate-50 transition-colors">Discard</button>
+                  <button type="submit" className="flex-1 px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all">Confirm</button>
                 </div>
               </form>
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
 
-      {/* AI Extraction Modal */}
-      <AnimatePresence>
+        {/* AI Modal */}
         {isAIModalOpen && (
           <div className="fixed inset-0 bg-[#141414]/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl"
-            >
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl">
               <div className="bg-indigo-600 p-6 text-white">
                 <h3 className="text-xl font-bold tracking-tight uppercase">AI PLANNING SYNC</h3>
                 <p className="text-[10px] font-black uppercase tracking-widest opacity-70 mt-1">Extract automation from manifest or notes</p>
               </div>
-              
               <div className="p-8 space-y-6">
-                <textarea 
-                  value={aiInput}
-                  onChange={(e) => setAiInput(e.target.value)}
-                  className="w-full h-40 bg-slate-50 border border-slate-200 rounded-2xl p-4 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/20 resize-none text-slate-600 leading-relaxed"
-                  placeholder="Paste planning text here... e.g., 'Truck ABC-1234 from Acme Corp arriving October 23rd at 10:00 AM...'"
-                />
-
+                <textarea value={aiInput} onChange={(e) => setAiInput(e.target.value)} className="w-full h-40 bg-slate-50 border border-slate-200 rounded-2xl p-4 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/20 resize-none text-slate-600 leading-relaxed" placeholder="Paste planning text here..." />
                 <div className="flex gap-3">
-                  <button 
-                    disabled={isExtracting}
-                    onClick={() => setIsAIModalOpen(false)}
-                    className="flex-1 px-6 py-3 border border-slate-200 rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-slate-50 transition-colors disabled:opacity-50"
-                  >
-                    Cancel
-                  </button>
-                  <button 
-                    disabled={isExtracting || !aiInput.trim()}
-                    onClick={handleAIExtract}
-                    className="flex-1 px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-                  >
-                    {isExtracting ? (
-                      <>
-                        <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                        Analyzing...
-                      </>
-                    ) : 'Execute Sync'}
+                  <button disabled={isExtracting} onClick={() => setIsAIModalOpen(false)} className="flex-1 px-6 py-3 border border-slate-200 rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-slate-50 transition-colors disabled:opacity-50">Cancel</button>
+                  <button disabled={isExtracting || !aiInput.trim()} onClick={handleAIExtract} className="flex-1 px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                    {isExtracting ? (<><div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />Analyzing...</>) : "Execute Sync"}
                   </button>
                 </div>
               </div>
             </motion.div>
           </div>
+        )}
+
+        {/* Settings Modal — NEW */}
+        {isSettingsOpen && (
+          <SettingsModal
+            docks={docks}
+            workHours={workHours}
+            holidays={holidays}
+            onSave={handleSettingsSave}
+            onClose={() => setIsSettingsOpen(false)}
+          />
+        )}
+
+        {/* Amend Modal — NEW */}
+        {amendingBooking && (
+          <AmendModal
+            booking={amendingBooking}
+            docks={docks}
+            workHours={workHours}
+            onSave={handleAmendSave}
+            onDelete={handleAmendDelete}
+            onClose={() => setAmendingBooking(null)}
+          />
         )}
       </AnimatePresence>
     </div>

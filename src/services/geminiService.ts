@@ -5,7 +5,7 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "AIzaSyDW33pFUIFGAKOQDLesja1BiHvXNnqVjg0" });
 
 export interface ExtractedBooking {
   requesterName: string;
