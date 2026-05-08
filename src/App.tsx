@@ -56,6 +56,7 @@ interface Booking {
   licensePlate: string;
   type: "manual" | "automatic";
   createdAt: string;
+  truckCount?:number
 }
 
 interface Dock {
@@ -72,7 +73,7 @@ interface WorkHours {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const SLOT_DURATION_MINS = 30;
-const TRUCKS_PER_SLOT = 2;
+const TRUCKS_PER_SLOT = 4;
 
 const INITIAL_DOCKS: Dock[] = [
   { id: "dock-1", name: "Dock 01", enabled: true },
@@ -83,7 +84,7 @@ const INITIAL_DOCKS: Dock[] = [
 
 const PRESET_HOLIDAYS: Record<string, { label: string; dates: string[] }> = {
   NL: {
-    label: "Neither Land",
+    label: "NeitherLand",
     dates: [
       "2025-01-01",
       "2025-04-18",
@@ -868,7 +869,7 @@ function AmendModal({
                 <input
                   value={truckReference}
                   onChange={(e) => setTruckReference(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20" 
                 />
               </div>
             </div>
@@ -958,6 +959,8 @@ export default function App() {
       return [];
     }
   });
+
+  console.log(bookings)
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
   const [isAIModalOpen, setIsAIModalOpen] = useState(false);
   const [aiInput, setAiInput] = useState("");
@@ -1116,49 +1119,77 @@ export default function App() {
     setSelectedSlot(null);
   };
 
-  const handleAIExtract = async () => {
+ const handleAIExtract = async () => {
     setIsExtracting(true);
     try {
       const lines = aiInput.split("\n").filter((l) => l.trim());
       const newBookings: Booking[] = [];
+
       lines.forEach((line) => {
+        // 1. Match Time (e.g., 08:30, 14h00)
         const timeMatch = line.match(/\b(\d{1,2})[:.h](\d{2})\b/);
+        
+        // 2. Match Name (Logistics companies or Capitalized names)
         const nameMatch = line.match(
-          /([A-Z][a-z]+(?: [A-Z][a-z]+)+|[A-Z]+ (?:Logistics|Transport|Shipping))/,
+          /([A-Z][a-z]+(?: [A-Z][a-z]+)+|[A-Z]+ (?:Logistics|Transport|Shipping|Express))/
         );
+
+        // 3. NEW: Match Truck Count (e.g., "3 trucks", "2 units", "4 containers")
+        // It looks for a number followed by keywords. Defaults to 1 if not found.
+        const countMatch = line.match(/(\d+)\s*(?:trucks?|units?|containers?|vcl)/i);
+        const truckCount = countMatch ? parseInt(countMatch[1]) : 1;
+
         if (timeMatch && nameMatch) {
-          const h = parseInt(timeMatch[1]),
-            m = parseInt(timeMatch[2]);
-          const start = new Date(
+          const h = parseInt(timeMatch[1]);
+          const m = parseInt(timeMatch[2]);
+          const baseStart = new Date(
             selectedDate.getFullYear(),
             selectedDate.getMonth(),
             selectedDate.getDate(),
             h,
             m,
-            0,
+            0
           );
-          const dock = activeDocks[newBookings.length % activeDocks.length];
-          if (dock) {
-            newBookings.push({
-              id: Math.random().toString(36).substr(2, 9),
-              dockId: dock.id,
-              startTime: start.toISOString(),
-              endTime: addMinutes(start, SLOT_DURATION_MINS).toISOString(),
-              requesterName: nameMatch[0],
-              truckReference: `AI-${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
-              driverName: "N/A",
-              driverPhone: "N/A",
-              licensePlate: "N/A",
-              type: "automatic",
-              createdAt: new Date().toISOString(),
-            });
+
+          // Loop based on extracted truckCount
+          for (let i = 0; i < truckCount; i++) {
+            // Distribute across slots if more than TRUCKS_PER_SLOT
+            const slotOffset = Math.floor(i / TRUCKS_PER_SLOT);
+            const startTime = addMinutes(baseStart, slotOffset * SLOT_DURATION_MINS);
+            
+            // Round-robin dock assignment
+            const dock = activeDocks[(newBookings.length) % activeDocks.length];
+
+            if (dock) {
+              newBookings.push({
+                id: Math.random().toString(36).substr(2, 9),
+                dockId: dock.id,
+                startTime: startTime.toISOString(),
+                endTime: addMinutes(startTime, SLOT_DURATION_MINS).toISOString(),
+                requesterName: nameMatch[0],
+                truckReference: truckCount > 1 
+                  ? `AI-${nameMatch[0].substring(0,3).toUpperCase()}-#${i + 1}`
+                  : `AI-${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
+                driverName: "TBD (AI Sync)",
+                driverPhone: "N/A",
+                licensePlate: "PENDING",
+                type: "automatic",
+                createdAt: new Date().toISOString(),
+              });
+            }
           }
         }
       });
-      setBookings((prev) => [...prev, ...newBookings]);
-      setIsAIModalOpen(false);
-      setAiInput("");
-    } catch {
+
+      if (newBookings.length > 0) {
+        setBookings((prev) => [...prev, ...newBookings]);
+        setIsAIModalOpen(false);
+        setAiInput("");
+      } else {
+        alert("No valid planning data found. Try: '09:00 Global Logistics 3 trucks'");
+      }
+    } catch (error) {
+      console.error(error);
       alert("Failed to extract planning.");
     } finally {
       setIsExtracting(false);
@@ -1905,6 +1936,12 @@ export default function App() {
                 </h3>
                 <p className="text-[10px] font-black uppercase tracking-widest opacity-70 mt-1">
                   Extract automation from manifest or notes
+                </p>
+
+                <p className="mt-5 font-bold">
+                  The Prompt must be in that format <br />
+                  08:00 AB Logistics 2 trucks
+                  {/* 12:30 Zenith Transport 5 units */}
                 </p>
               </div>
               <div className="p-8 space-y-6">

@@ -10,6 +10,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "AIzaSyDW33pF
 export interface ExtractedBooking {
   requesterName: string;
   truckReference: string;
+  truckCount:number
   driverName: string;
   driverPhone: string;
   licensePlate: string;
