@@ -17,14 +17,14 @@ export interface ExtractedBooking {
   suggestedDate: string; // ISO
   suggestedTime: string; // HH:mm
 }
-
+console.log(process.env.GEMINI_API_KEY2)
 export async function extractPlanningFromText(text: string): Promise<ExtractedBooking[]> {
   if (!process.env.GEMINI_API_KEY2) {
     throw new Error("GEMINI_API_KEY2 is not configured");
   }
 
   const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
+    model: "gemini-2.5-flash",
     contents: `Extract dock booking information from the following text: "${text}". 
     If multiple bookings are present, extract all of them. 
     Dates should be in YYYY-MM-DD format. Times should be in HH:mm format.`,

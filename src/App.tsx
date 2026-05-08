@@ -1120,65 +1120,76 @@ export default function App() {
   };
 
   const handleAIExtract = async () => {
-  setIsExtracting(true);
-  try {
-    // 1. CALL THE GEMINI FUNCTION (instead of using regex)
-    // This sends the whole block of text to the AI to handle the "messy" parts
-    const extractedData = await extractPlanningFromText(aiInput);
+    setIsExtracting(true);
+    try {
+      // 1. CALL THE GEMINI FUNCTION (instead of using regex)
+      // This sends the whole block of text to the AI to handle the "messy" parts
+      const extractedData = await extractPlanningFromText(aiInput);
 
-    if (extractedData && extractedData.length > 0) {
-      const newBookings: Booking[] = [];
+      if (extractedData && extractedData.length > 0) {
+        const newBookings: Booking[] = [];
 
-      extractedData.forEach((item:any) => {
-        // Use the truckCount from AI, or default to 1
-        const truckCount = item.truckCount || 1;
-        
-        // Parse the time/date returned by AI
-        // If AI didn't find a time, default to 09:00
-        const [h, m] = (item.suggestedTime || "09:00").split(':').map(Number);
-        
-        const baseStart = new Date(selectedDate);
-        baseStart.setHours(h, m, 0, 0);
+        extractedData.forEach((item: any) => {
+          // Use the truckCount from AI, or default to 1
+          const truckCount = item.truckCount || 1;
 
-        for (let i = 0; i < truckCount; i++) {
-          const slotOffset = Math.floor(i / TRUCKS_PER_SLOT);
-          const startTime = addMinutes(baseStart, slotOffset * SLOT_DURATION_MINS);
-          
-          // Assign to dock
-          const dockIndex = (newBookings.length + bookings.length) % activeDocks.length;
-          const dock = activeDocks[dockIndex];
+          // Parse the time/date returned by AI
+          // If AI didn't find a time, default to 09:00
+          const [h, m] = (item.suggestedTime || "09:00").split(":").map(Number);
 
-          if (dock) {
-            newBookings.push({
-              id: Math.random().toString(36).substr(2, 9),
-              dockId: dock.id,
-              startTime: startTime.toISOString(),
-              endTime: addMinutes(startTime, SLOT_DURATION_MINS).toISOString(),
-              requesterName: item.requesterName || "Unknown Carrier",
-              truckReference: item.truckReference || `AI-${Math.random().toString(36).toUpperCase().substr(0,4)}`,
-              driverName: item.driverName || "TBD",
-              driverPhone: item.driverPhone || "N/A",
-              licensePlate: item.licensePlate || "PENDING",
-              type: "automatic",
-              createdAt: new Date().toISOString(),
-            });
+          const baseStart = new Date(selectedDate);
+          baseStart.setHours(h, m, 0, 0);
+
+          for (let i = 0; i < truckCount; i++) {
+            const slotOffset = Math.floor(i / TRUCKS_PER_SLOT);
+            const startTime = addMinutes(
+              baseStart,
+              slotOffset * SLOT_DURATION_MINS,
+            );
+
+            // Assign to dock
+            const dockIndex =
+              (newBookings.length + bookings.length) % activeDocks.length;
+            const dock = activeDocks[dockIndex];
+
+            if (dock) {
+              newBookings.push({
+                id: Math.random().toString(36).substr(2, 9),
+                dockId: dock.id,
+                startTime: startTime.toISOString(),
+                endTime: addMinutes(
+                  startTime,
+                  SLOT_DURATION_MINS,
+                ).toISOString(),
+                requesterName: item.requesterName || "Unknown Carrier",
+                truckReference:
+                  item.truckReference ||
+                  `AI-${Math.random().toString(36).toUpperCase().substr(0, 4)}`,
+                driverName: item.driverName || "TBD",
+                driverPhone: item.driverPhone || "N/A",
+                licensePlate: item.licensePlate || "PENDING",
+                type: "automatic",
+                createdAt: new Date().toISOString(),
+              });
+            }
           }
-        }
-      });
+        });
 
-      setBookings((prev) => [...prev, ...newBookings]);
-      setIsAIModalOpen(false);
-      setAiInput("");
-    } else {
-      alert("The AI couldn't find any booking details. Try being a bit more specific!");
+        setBookings((prev) => [...prev, ...newBookings]);
+        setIsAIModalOpen(false);
+        setAiInput("");
+      } else {
+        alert(
+          "The AI couldn't find any booking details. Try being a bit more specific!",
+        );
+      }
+    } catch (error) {
+      console.error("Extraction error:", error);
+      alert("Failed to connect to AI. Please check your API key.");
+    } finally {
+      setIsExtracting(false);
     }
-  } catch (error) {
-    console.error("Extraction error:", error);
-    alert("Failed to connect to AI. Please check your API key.");
-  } finally {
-    setIsExtracting(false);
-  }
-};
+  };
 
   return (
     <div className="min-h-screen bg-zinc-100 text-slate-900 font-sans p-6">
@@ -1460,13 +1471,19 @@ export default function App() {
                       {format(time, "HH:mm")}
                     </div>
                     {activeDocks.map((dock) => {
-                      const currentBookings = bookings.filter(
-                        (b) =>
+                      const currentBookings = bookings.filter((b) => {
+                        // 1. Log the types to debug
+
+                        // 2. Perform the checks and return the boolean result
+                        return (
                           b.dockId === dock.id &&
                           isSameDay(parseISO(b.startTime), time) &&
                           format(parseISO(b.startTime), "HH:mm") ===
-                            format(time, "HH:mm"),
-                      );
+                            format(time, "HH:mm")
+                        );
+                      });
+                      console.log(currentBookings);
+
                       const isFull = currentBookings.length >= TRUCKS_PER_SLOT;
                       const isSelected =
                         selectedSlot?.dockId === dock.id &&
@@ -1923,9 +1940,9 @@ export default function App() {
                 </p>
 
                 {/* <p className="mt-5 font-bold"> */}
-                  {/* The Prompt must be in that format <br /> */}
-                  {/* 08:00 AB Logistics 2 trucks */}
-                  {/* 12:30 Zenith Transport 5 units */}
+                {/* The Prompt must be in that format <br /> */}
+                {/* 08:00 AB Logistics 2 trucks */}
+                {/* 12:30 Zenith Transport 5 units */}
                 {/* </p> */}
               </div>
               <div className="p-8 space-y-6">
