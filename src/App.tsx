@@ -41,7 +41,7 @@ import {
   isToday,
 } from "date-fns";
 import { motion, AnimatePresence } from "motion/react";
-
+import { extractPlanningFromText } from "./services/geminiService";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface Booking {
@@ -1120,92 +1120,65 @@ export default function App() {
   };
 
   const handleAIExtract = async () => {
-    setIsExtracting(true);
-    try {
-      const lines = aiInput.split("\n").filter((l) => l.trim());
+  setIsExtracting(true);
+  try {
+    // 1. CALL THE GEMINI FUNCTION (instead of using regex)
+    // This sends the whole block of text to the AI to handle the "messy" parts
+    const extractedData = await extractPlanningFromText(aiInput);
+
+    if (extractedData && extractedData.length > 0) {
       const newBookings: Booking[] = [];
 
-      lines.forEach((line) => {
-        // 1. Match Time (e.g., 08:30, 14h00)
-        const timeMatch = line.match(/\b(\d{1,2})[:.h](\d{2})\b/);
+      extractedData.forEach((item:any) => {
+        // Use the truckCount from AI, or default to 1
+        const truckCount = item.truckCount || 1;
+        
+        // Parse the time/date returned by AI
+        // If AI didn't find a time, default to 09:00
+        const [h, m] = (item.suggestedTime || "09:00").split(':').map(Number);
+        
+        const baseStart = new Date(selectedDate);
+        baseStart.setHours(h, m, 0, 0);
 
-        // 2. Match Name (Logistics companies or Capitalized names)
-        const nameMatch = line.match(
-          /([A-Z][a-z]+(?: [A-Z][a-z]+)+|[A-Z]+ (?:Logistics|Transport|Shipping|Express))/,
-        );
+        for (let i = 0; i < truckCount; i++) {
+          const slotOffset = Math.floor(i / TRUCKS_PER_SLOT);
+          const startTime = addMinutes(baseStart, slotOffset * SLOT_DURATION_MINS);
+          
+          // Assign to dock
+          const dockIndex = (newBookings.length + bookings.length) % activeDocks.length;
+          const dock = activeDocks[dockIndex];
 
-        // 3. NEW: Match Truck Count (e.g., "3 trucks", "2 units", "4 containers")
-        // It looks for a number followed by keywords. Defaults to 1 if not found.
-        const countMatch = line.match(
-          /(\d+)\s*(?:trucks?|units?|containers?|vcl)/i,
-        );
-        const truckCount = countMatch ? parseInt(countMatch[1]) : 1;
-
-        if (timeMatch && nameMatch) {
-          const h = parseInt(timeMatch[1]);
-          const m = parseInt(timeMatch[2]);
-          const baseStart = new Date(
-            selectedDate.getFullYear(),
-            selectedDate.getMonth(),
-            selectedDate.getDate(),
-            h,
-            m,
-            0,
-          );
-
-          // Loop based on extracted truckCount
-          for (let i = 0; i < truckCount; i++) {
-            // Distribute across slots if more than TRUCKS_PER_SLOT
-            const slotOffset = Math.floor(i / TRUCKS_PER_SLOT);
-            const startTime = addMinutes(
-              baseStart,
-              slotOffset * SLOT_DURATION_MINS,
-            );
-
-            // Round-robin dock assignment
-            const dock = activeDocks[newBookings.length % activeDocks.length];
-
-            if (dock) {
-              newBookings.push({
-                id: Math.random().toString(36).substr(2, 9),
-                dockId: dock.id,
-                startTime: startTime.toISOString(),
-                endTime: addMinutes(
-                  startTime,
-                  SLOT_DURATION_MINS,
-                ).toISOString(),
-                requesterName: nameMatch[0],
-                truckReference:
-                  truckCount > 1
-                    ? `AI-${nameMatch[0].substring(0, 3).toUpperCase()}-#${i + 1}`
-                    : `AI-${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
-                driverName: "TBD (AI Sync)",
-                driverPhone: "N/A",
-                licensePlate: "PENDING",
-                type: "automatic",
-                createdAt: new Date().toISOString(),
-              });
-            }
+          if (dock) {
+            newBookings.push({
+              id: Math.random().toString(36).substr(2, 9),
+              dockId: dock.id,
+              startTime: startTime.toISOString(),
+              endTime: addMinutes(startTime, SLOT_DURATION_MINS).toISOString(),
+              requesterName: item.requesterName || "Unknown Carrier",
+              truckReference: item.truckReference || `AI-${Math.random().toString(36).toUpperCase().substr(0,4)}`,
+              driverName: item.driverName || "TBD",
+              driverPhone: item.driverPhone || "N/A",
+              licensePlate: item.licensePlate || "PENDING",
+              type: "automatic",
+              createdAt: new Date().toISOString(),
+            });
           }
         }
       });
 
-      if (newBookings.length > 0) {
-        setBookings((prev) => [...prev, ...newBookings]);
-        setIsAIModalOpen(false);
-        setAiInput("");
-      } else {
-        alert(
-          "No valid planning data found. Try: '09:00 Global Logistics 3 trucks'",
-        );
-      }
-    } catch (error) {
-      console.error(error);
-      alert("Failed to extract planning.");
-    } finally {
-      setIsExtracting(false);
+      setBookings((prev) => [...prev, ...newBookings]);
+      setIsAIModalOpen(false);
+      setAiInput("");
+    } else {
+      alert("The AI couldn't find any booking details. Try being a bit more specific!");
     }
-  };
+  } catch (error) {
+    console.error("Extraction error:", error);
+    alert("Failed to connect to AI. Please check your API key.");
+  } finally {
+    setIsExtracting(false);
+  }
+};
 
   return (
     <div className="min-h-screen bg-zinc-100 text-slate-900 font-sans p-6">
@@ -1949,11 +1922,11 @@ export default function App() {
                   Extract automation from manifest or notes
                 </p>
 
-                <p className="mt-5 font-bold">
-                  The Prompt must be in that format <br />
-                  08:00 AB Logistics 2 trucks
+                {/* <p className="mt-5 font-bold"> */}
+                  {/* The Prompt must be in that format <br /> */}
+                  {/* 08:00 AB Logistics 2 trucks */}
                   {/* 12:30 Zenith Transport 5 units */}
-                </p>
+                {/* </p> */}
               </div>
               <div className="p-8 space-y-6">
                 <textarea
