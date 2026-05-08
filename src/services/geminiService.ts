@@ -5,7 +5,7 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY2  });
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY3  });
 
 export interface ExtractedBooking {
   requesterName: string;
@@ -17,10 +17,10 @@ export interface ExtractedBooking {
   suggestedDate: string; // ISO
   suggestedTime: string; // HH:mm
 }
-console.log(process.env.GEMINI_API_KEY2)
+console.log(process.env.GEMINI_API_KEY3)
 export async function extractPlanningFromText(text: string): Promise<ExtractedBooking[]> {
-  if (!process.env.GEMINI_API_KEY2) {
-    throw new Error("GEMINI_API_KEY2 is not configured");
+  if (!process.env.GEMINI_API_KEY3) {
+    throw new Error("GEMINI_API_KEY3 is not configured");
   }
 
   const response = await ai.models.generateContent({
